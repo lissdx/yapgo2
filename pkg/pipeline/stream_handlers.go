@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"runtime"
 	"sync"
 )
 
@@ -20,6 +19,7 @@ func (s StubFunc[T]) Run(ctx context.Context, inStream ReadOnlyStream[T]) contex
 func (ss StreamToStreamHandler[T, RS]) Run(ctx context.Context, inStream ReadOnlyStream[T]) ReadOnlyStream[RS] {
 	return ss(ctx, inStream)
 }
+
 func (sss StreamsToStreamHandler[S, RS]) Run(ctx context.Context, inStreams S) ReadOnlyStream[RS] {
 	return sss(ctx, inStreams)
 }
@@ -51,7 +51,7 @@ func OrDoneFnFactory[T any]() StreamToStreamHandler[T, T] {
 					case outStream <- vData:
 					}
 				}
-				runtime.Gosched()
+				//runtime.Gosched()
 			}
 		}()
 		return outStream

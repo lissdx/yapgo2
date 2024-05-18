@@ -2,176 +2,128 @@ package pipeline
 
 import (
 	"context"
+	genHandlerConf "github.com/lissdx/yapgo2/pkg/pipeline/config/generator/config_generator_handler"
+	"log"
 	"math/rand"
 	"testing"
 	"time"
 )
 
 /**
- * Custom Generators Examples
+ *  Generators Examples
  */
 
-// GeneratorFnSliceString simple generation from
-// given slice of strings
-func GeneratorFnSliceString(s []string) GeneratorFn[string] {
-	currentIndx := 0
-	return func() string {
-		defer func() {
-			currentIndx = (currentIndx + 1) % len(s)
-		}()
-
-		return s[currentIndx]
-	}
-}
-
-// Random int generation example
-func TestExample_GeneratorFn(t *testing.T) {
+// Random int generation (10 times generation) example
+func TestExample_GeneratorFactoryWithTimesToGenerate(t *testing.T) {
 	timesToGenerate := 10
+	// Custom generator
+	genFunc := func() int {
+		return rand.Intn(100)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	dataStream := GeneratorFnToStreamGeneratorFactory[GeneratorFn[int]](WithTimesToGenerate(uint(timesToGenerate))).
-		Run(ctx, func() int {
-			return rand.Intn(100)
-		})
+	// Create the generator handler
+	// It should generate values timesToGenerate times
+	// Values should be random int in interval [0-100)
+	// see genFunc
+	generatorHandler := GeneratorHandlerFactory[int](genFunc, genHandlerConf.WithTimesToGenerate(uint(timesToGenerate)))
+
+	// Set up the generator stage with the generatorHandler
+	toStreamGeneratorStage := GeneratorStageFactory[int](generatorHandler)
+
+	// Run the stage
+	outStream := toStreamGeneratorStage.Run(ctx)
 
 	dataCounter := 0
-	for v := range dataStream {
+	for v := range outStream {
 		dataCounter += 1
-		t.Log(v)
+		log.Default().Println("Got value:", v)
 	}
 
-	t.Log("Data was generated:", dataCounter, "times")
+	log.Default().Println("Data was generated:", dataCounter, "times")
+
 }
 
-// TestExample_SliceOfStringsGeneratorFn1 "Infinitely" generates data
-// from the given slice
-func TestExample_SliceOfStringsGeneratorFn1(t *testing.T) {
-	dataSlice := []string{"one", "two", "three", "four", "five"}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*1)
+// Random int generation never ended  example
+func TestExample_GeneratorFactoryWithOutTimesToGenerate(t *testing.T) {
+	// Use predefined GeneratorFunc factory
+	genFunc := RandomIntGeneratorFuncFactory(1001)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond*300)
 	defer cancel()
 
-	dataStream := GeneratorFnToStreamGeneratorFactory[GeneratorFn[string]]().
-		Run(ctx, GeneratorFnSliceString(dataSlice))
+	// Create (wrap) the genFunc with GeneratorHandler
+	generatorHandler := GeneratorHandlerFactory[int](genFunc)
+
+	// Set up the generator stage
+	toStreamGeneratorStage := GeneratorStageFactory[int](generatorHandler)
+	// ... run it and get the output stream
+	outStream := toStreamGeneratorStage.Run(ctx)
 
 	dataCounter := 0
-	for v := range dataStream {
+	for v := range outStream {
 		dataCounter += 1
-		t.Log(v)
+		log.Default().Println("Got value:", v)
 	}
 
-	t.Log("Data was generated:", dataCounter, "times")
+	log.Default().Println("Data was generated:", dataCounter, "times")
+
 }
 
-// TestExample_SliceOfStringsGeneratorFn2 generates data
-// from the given slice. Now we try to generate data by the len.
-// of given slice
-func TestExample_SliceOfStringsGeneratorFn2(t *testing.T) {
-	dataSlice := []string{"one", "two", "three", "four", "five"}
-	ctx, cancel := context.WithCancel(context.Background())
+// We are able to wrap the main GeneratorHandler
+// with a Middleware function(s)
+// Random int generation never ended
+func TestExample_GeneratorFactoryWithMiddleWare(t *testing.T) {
+
+	genFunc := RandomIntGeneratorFuncFactory(1001)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond*1000)
 	defer cancel()
 
-	dataStream := GeneratorFnToStreamGeneratorFactory[GeneratorFn[string]](WithTimesToGenerate(uint(len(dataSlice)))).
-		Run(ctx, GeneratorFnSliceString(dataSlice))
+	generatorHandler := GeneratorHandlerFactory[int](genFunc)
+	middleware1 := GeneratorTracerMiddlewareExample[int]("generator tracer", generatorHandler)
+	middleware2 := GeneratorLoggerMiddlewareExample[int]("generator logger", middleware1)
+
+	toStreamGeneratorStage := GeneratorStageFactory[int](middleware2)
+	outStream := toStreamGeneratorStage.Run(ctx)
 
 	dataCounter := 0
-	for v := range dataStream {
+	for v := range outStream {
 		dataCounter += 1
-		t.Log(v)
+		log.Default().Println("Got value:", v)
 	}
 
-	t.Log("Data was generated:", dataCounter, "times")
+	log.Default().Println("Data was generated:", dataCounter, "times")
 }
 
-// TestExample_SliceOfStringsGeneratorFn3 generates data
-// from the given slice. Now we try to generate
-// 7 times
-func TestExample_SliceOfStringsGeneratorFn3(t *testing.T) {
-	dataSlice := []string{"one", "two", "three", "four", "five"}
-	ctx, cancel := context.WithCancel(context.Background())
+// TestExample_SliceGeneratorWithMiddleWare Generate data
+// from the given slice of data
+// with a Middleware function(s)
+// generate data len(slice) times
+// simplest way (without type annotation)
+func TestExample_SliceGeneratorWithMiddleWare(t *testing.T) {
+
+	data := []int{10, 20, 30, 40, 50, 60, 70, 80, 90, 100}
+	genFunc := SliceGeneratorFuncFactory(data)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond*1000)
 	defer cancel()
 
-	dataStream := GeneratorFnToStreamGeneratorFactory[GeneratorFn[string]](WithTimesToGenerate(7)).
-		Run(ctx, GeneratorFnSliceString(dataSlice))
+	generatorHandler := GeneratorHandlerFactory(genFunc, genHandlerConf.WithTimesToGenerate(uint(len(data))))
+	traceMiddleware1 := GeneratorTracerMiddlewareExample("Gen traces", generatorHandler)
+	loggerMiddleware := GeneratorLoggerMiddlewareExample("generator logger", traceMiddleware1)
+	traceMiddleware2 := GeneratorTracerMiddlewareExample("External tracer", loggerMiddleware)
+
+	toStreamGeneratorStage := GeneratorStageFactory(traceMiddleware2)
+	outStream := toStreamGeneratorStage.Run(ctx)
 
 	dataCounter := 0
-	for v := range dataStream {
+	for v := range outStream {
 		dataCounter += 1
-		t.Log(v)
+		log.Default().Println("Got value:", v)
 	}
 
-	t.Log("Data was generated:", dataCounter, "times")
-}
+	log.Default().Println("Data was generated:", dataCounter, "times")
 
-// TestExample_SliceToStreamOnePassGeneratorFactory1 generates data
-// from the given slice of strings.
-func TestExample_SliceToStreamOnePassGeneratorFactory1(t *testing.T) {
-	dataSlice := []string{"one", "two", "three", "four", "five", "six", "seven", "eight"}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	dataStream := SliceToStreamOnePassGeneratorFactory[[]string]().Run(ctx, dataSlice)
-
-	dataCounter := 0
-	for v := range dataStream {
-		dataCounter += 1
-		t.Log(v)
-	}
-
-	t.Log("Data was generated:", dataCounter, "times")
-}
-
-// TestExample_SliceToStreamOnePassGeneratorFactory2 generates data
-// from the given slice of int.
-func TestExample_SliceToStreamOnePassGeneratorFactory2(t *testing.T) {
-	dataSlice := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	dataStream := SliceToStreamOnePassGeneratorFactory[[]int]().Run(ctx, dataSlice)
-
-	dataCounter := 0
-	for v := range dataStream {
-		dataCounter += 1
-		t.Log(v)
-	}
-
-	t.Log("Data was generated:", dataCounter, "times")
-}
-
-// TestExample_SliceToStreamInfinitelyGeneratorFactory1 generates data
-// from the given slice of int Infinitely.
-func TestExample_SliceToStreamInfinitelyGeneratorFactory1(t *testing.T) {
-	dataSlice := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*1)
-	defer cancel()
-
-	dataStream := SliceToStreamInfinitelyGeneratorFactory[[]int]().Run(ctx, dataSlice)
-
-	dataCounter := 0
-	for v := range dataStream {
-		dataCounter += 1
-		t.Log(v)
-	}
-
-	t.Log("Data was generated:", dataCounter, "times")
-}
-
-// TestExample_SliceToStreamNGeneratorFactory generates data
-// from the given slice of int N times.
-func TestExample_SliceToStreamNGeneratorFactory(t *testing.T) {
-	timesToGenerate := 7
-	dataSlice := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	dataStream := SliceToStreamNGeneratorFactory[[]int](uint(timesToGenerate)).Run(ctx, dataSlice)
-
-	dataCounter := 0
-	for v := range dataStream {
-		dataCounter += 1
-		t.Log(v)
-	}
-
-	t.Log("Data was generated:", dataCounter, "times")
 }
