@@ -5,15 +5,15 @@ import (
 	pl "github.com/lissdx/yapgo2/pkg/pipeline"
 	genHandlerConf "github.com/lissdx/yapgo2/pkg/pipeline/config/generator/config_generator_handler"
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/goleak"
 	"slices"
 	"testing"
+	"time"
 )
 
-//func TestMain(m *testing.M) {
-//	goleak.VerifyTestMain(m)
-//}
-
 func TestOrDone1(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	tests := []struct {
 		name     string
 		dataList []int
@@ -47,550 +47,238 @@ func TestOrDone1(t *testing.T) {
 	}
 }
 
-//func TestOrDone2(t *testing.T) {
-//	tests := []struct {
-//		name string
-//		dataList  []int
-//		want []int
-//	}{
-//		{name: "oneInt", dataList: []int{1}, want: []int{1}},
-//		{name: "twoInt", dataList: []int{-1, 0}, want: []int{-1, 0}},
-//		{name: "multiInt", dataList: []int{777, 555, 999, 999, 999, 999, 999, 999}, want: []int{777, 555, 999, 999, 999, 999, 999, 999}},
-//	}
-//
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//
-//			ctx, cancelFn := context.WithTimeout(context.Background(), time.Microsecond*1000)
-//			defer cancelFn()
-//
-//			dataStream := pipeline.SliceToStreamInfinitelyGeneratorFactory[[]int]().Run(ctx, tt.dataList)
-//
-//			var got []int
-//			for num := range pipeline.OrDoneFnFactory[int]().Run(ctx, dataStream) {
-//				got = append(got, num)
-//			}
-//
-//			t.Logf("%s got: %v", t.Name(), got)
-//			if len(got) < len(tt.want) {
-//				t.Errorf("%s = %v, want %v", t.Name(), got, tt.want)
-//			}
-//
-//			for i, wantVal := range tt.want {
-//				if got[i] != wantVal {
-//					t.Errorf("%s = %v, want %v", t.Name(), got, tt.want)
-//				}
-//			}
-//		})
-//	}
-//}
+func TestOrDoneContextWithTimeout(t *testing.T) {
+	tests := []struct {
+		name     string
+		dataList []int
+		want     []int
+	}{
+		{name: "oneInt", dataList: []int{1}, want: []int{1}},
+		{name: "twoInt", dataList: []int{-1, 0}, want: []int{-1, 0}},
+		{name: "multiInt", dataList: []int{777, 555, 999, 999, 999, 999, 999, 999}, want: []int{555, 777, 999}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			ctx, cancelFn := context.WithTimeout(context.Background(), time.Microsecond*1000)
+			defer cancelFn()
+
+			genHandler := pl.GeneratorHandlerFactory(pl.SliceGeneratorFuncFactory(tt.dataList))
+			dataStream := pl.GeneratorStageFactory(genHandler).Run(ctx)
+
+			var got []int
+			for num := range pl.OrDoneFnFactory[int]().Run(ctx, dataStream) {
+				got = append(got, num)
+			}
+
+			t.Logf("%s got: %v", t.Name(), got)
+			slices.Sort(got)
+			res := slices.Compact(got)
+
+			assert.Equal(t, tt.want, res)
+		})
+	}
+}
 
 // Close channel
-//func TestOrDone3(t *testing.T) {
-//	tests := []struct {
-//		name string
-//		dataList  []int
-//		want []int
-//	}{
-//		{name: "oneInt", dataList: []int{1}, want: []int{}},
-//		{name: "twoInt", dataList: []int{-1, 0}, want: []int{}},
-//		{name: "multiInt", dataList: []int{777, 555, 999, 999, 999, 999, 999, 999}, want: []int{}},
-//	}
-//
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//
-//			ctx, cancelFn := context.WithCancel(context.Background())
-//			defer cancelFn()
-//
-//			dataStream := pipeline.SliceToStreamOnePassGeneratorFactory[[]int]().Run(ctx, tt.dataList)
-//
-//			// drain and close channel
-//			for range dataStream {
-//				// do nothing
-//			}
-//
-//			var got []int
-//			for num := range pipeline.OrDoneFnFactory[int]().Run(ctx, dataStream) {
-//				got = append(got, num)
-//			}
-//
-//			t.Logf("%s got: %v", t.Name(), got)
-//			if len(got) != len(tt.want) {
-//				t.Errorf("%s = %v, want %v", t.Name(), got, tt.want)
-//			}
-//
-//			for i, wantVal := range tt.want {
-//				if got[i] != wantVal {
-//					t.Errorf("%s = %v, want %v", t.Name(), got, tt.want)
-//				}
-//			}
-//		})
-//	}
-//}
+func TestOrDoneReadFromClosedChannel(t *testing.T) {
+	tests := []struct {
+		name     string
+		dataList []int
+		want     []int
+	}{
+		{name: "oneInt", dataList: []int{1}, want: []int{}},
+		{name: "twoInt", dataList: []int{-1, 0}, want: []int{}},
+		{name: "multiInt", dataList: []int{777, 555, 999, 999, 999, 999, 999, 999}, want: []int{}},
+	}
 
-//func TestMergeFnFactory1(t *testing.T) {
-//	tests := []struct {
-//		name string
-//		dataList  [][]int
-//		want []int
-//	}{
-//		{name: "oneInt", dataList: [][]int{{1}}, want: []int{1}},
-//		{name: "twoInt", dataList: [][]int{{-1, 0}}, want: []int{-1, 0}},
-//		{name: "multiInt", dataList: [][]int{{1}, {-1, 0}, {777, 555, 999, 999, 999, 999, 999, 999}}, want: []int{-1, 0, 1, 555, 777, 999}},
-//	}
-//
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//
-//			ctx, cancelFn := context.WithTimeout(context.Background(), time.Microsecond*1000)
-//			defer cancelFn()
-//
-//			dataStreams := make([]pipeline.ReadOnlyStream[int], 0, len(tt.dataList))
-//			for i := 0; i < len(tt.dataList); i++ {
-//				dataStream := pipeline.SliceToStreamInfinitelyGeneratorFactory[[]int]().Run(ctx, tt.dataList[i])
-//				dataStreams = append(dataStreams, dataStream)
-//			}
-//
-//			resultDataStream := pipeline.MergeFnFactory[[]pipeline.ReadOnlyStream[int]]().Run(ctx, dataStreams)
-//
-//			var got []int
-//			for num := range pipeline.OrDoneFnFactory[int]().Run(ctx, resultDataStream) {
-//				got = append(got, num)
-//			}
-//
-//			t.Logf("%s got: %v", t.Name(), got)
-//			if len(got) < len(tt.want) {
-//				t.Errorf("%s = %v, want %v", t.Name(), got, tt.want)
-//			}
-//
-//			slices.Sort(got)
-//			res := slices.Compact(got)
-//			for i, wantVal := range tt.want {
-//				if res[i] != wantVal {
-//					t.Errorf("%s = %v, want %v", t.Name(), res, tt.want)
-//				}
-//			}
-//		})
-//	}
-//}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			ctx, cancelFn := context.WithTimeout(context.Background(), time.Microsecond*1000)
+			defer cancelFn()
+
+			genHandler := pl.GeneratorHandlerFactory(pl.SliceGeneratorFuncFactory(tt.dataList))
+			dataStream := pl.GeneratorStageFactory(genHandler).Run(ctx)
+
+			// drain and wait for
+			// channel closing
+			for range dataStream {
+				// do nothing
+			}
+
+			orDoneCtx, orDoneCancel := context.WithCancel(context.Background())
+			defer orDoneCancel()
+			var got = make([]int, 0)
+			for num := range pl.OrDoneFnFactory[int]().Run(orDoneCtx, dataStream) {
+				got = append(got, num)
+			}
+
+			t.Logf("%s got: %v", t.Name(), got)
+			slices.Sort(got)
+			res := slices.Compact(got)
+
+			assert.Equal(t, tt.want, res)
+		})
+	}
+}
+
+func TestMergeFnFactory1(t *testing.T) {
+	tests := []struct {
+		name     string
+		dataList [][]int
+		want     []int
+	}{
+		{name: "oneInt", dataList: [][]int{{1}}, want: []int{1}},
+		{name: "twoInt", dataList: [][]int{{-1, 0}}, want: []int{-1, 0}},
+		{name: "multiInt", dataList: [][]int{{1}, {-1, 0}, {777, 555, 999, 999, 999, 999, 999, 999}}, want: []int{-1, 0, 1, 555, 777, 999}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			ctx, cancelFn := context.WithTimeout(context.Background(), time.Microsecond*1000)
+			defer cancelFn()
+
+			dataStreams := make([]pl.ReadOnlyStream[int], 0, len(tt.dataList))
+			for i := 0; i < len(tt.dataList); i++ {
+				genHandler := pl.GeneratorHandlerFactory(pl.SliceGeneratorFuncFactory(tt.dataList[i]))
+				dataStream := pl.GeneratorStageFactory(genHandler).Run(ctx)
+				dataStreams = append(dataStreams, dataStream)
+			}
+
+			resultDataStream := pl.MergeFnFactory[[]pl.ReadOnlyStream[int]]().Run(ctx, dataStreams)
+
+			var got []int
+			for num := range pl.OrDoneFnFactory[int]().Run(ctx, resultDataStream) {
+				got = append(got, num)
+			}
+
+			t.Logf("%s got: %v", t.Name(), got)
+			slices.Sort(got)
+			res := slices.Compact(got)
+
+			assert.Equal(t, tt.want, res)
+		})
+	}
+}
 
 // with closed channels
-//func TestMergeFnFactory2(t *testing.T) {
-//	tests := []struct {
-//		name          string
-//		dataList           [][]int
-//		want          []int
-//		timesGenerate int
-//	}{
-//		{name: "one", dataList: [][]int{{1}}, want: []int{1}},
-//		{name: "two", dataList: [][]int{{1}, {-1, 0}}, want: []int{-1, 0, 1}},
-//		{name: "multi", timesGenerate: 4, dataList: [][]int{{1}, {-1, 0}, {777, 555, 888, 111, 33333, 999, 999, 999}}, want: []int{-1, 0, 111, 555, 777, 888}},
-//	}
-//
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//
-//			ctx, cancelFn := context.WithTimeout(context.Background(), time.Millisecond*100)
-//			defer cancelFn()
-//
-//			dataStreams := make([]pipeline.ReadOnlyStream[int], 0, len(tt.dataList))
-//
-//			if len(tt.dataList) == 1 {
-//				dataStream := pipeline.SliceToStreamInfinitelyGeneratorFactory[[]int]().Run(ctx, tt.dataList[0])
-//				dataStreams = append(dataStreams, dataStream)
-//			}
-//
-//			if len(tt.dataList) == 2 {
-//				dataStream1 := pipeline.SliceToStreamInfinitelyGeneratorFactory[[]int]().Run(ctx, tt.dataList[0])
-//				dataStreams = append(dataStreams, dataStream1)
-//				dataStream2 := pipeline.SliceToStreamOnePassGeneratorFactory[[]int]().Run(ctx, tt.dataList[1])
-//				dataStreams = append(dataStreams, dataStream2)
-//			}
-//
-//			if len(tt.dataList) == 3 {
-//				genCtx, localCancel := context.WithTimeout(ctx, time.Microsecond*100)
-//				dataStream1 := pipeline.SliceToStreamInfinitelyGeneratorFactory[[]int]().Run(genCtx, tt.dataList[0])
-//				// drain channel until not closed
-//				pipeline.NoOpSubFnFactory[int]()(genCtx, dataStream1)
-//				localCancel()
-//				// add closed channel
-//				dataStreams = append(dataStreams, dataStream1)
-//				dataStream2 := pipeline.SliceToStreamInfinitelyGeneratorFactory[[]int]().Run(ctx, tt.dataList[1])
-//				dataStreams = append(dataStreams, dataStream2)
-//				dataStream3 := pipeline.SliceToStreamNGeneratorFactory[[]int](uint(tt.timesGenerate)).Run(ctx, tt.dataList[2])
-//				dataStreams = append(dataStreams, dataStream3)
-//			}
-//
-//			resultDataStream := pipeline.MergeFnFactory[[]pipeline.ReadOnlyStream[int]]().Run(ctx, dataStreams)
-//
-//			var got []int
-//			for num := range pipeline.OrDoneFnFactory[int]().Run(ctx, resultDataStream) {
-//				got = append(got, num)
-//			}
-//
-//			//t.Logf("%s got: %v", t.Name(), got)
-//			//if len(got) < len(tt.want) {
-//			//	t.Errorf("%s = %v, want %v", t.Name(), got, tt.want)
-//			//}
-//
-//			slices.Sort(got)
-//			res := slices.Compact(got)
-//
-//			if len(res) != len(tt.want) {
-//				t.Errorf("%s = %v, want %v", t.Name(), res, tt.want)
-//			}
-//			for i, wantVal := range tt.want {
-//				if res[i] != wantVal {
-//					t.Errorf("%s = %v, want %v", t.Name(), res, tt.want)
-//				}
-//			}
-//		})
-//	}
-//}
+func TestMergeFnFactory2(t *testing.T) {
+	tests := []struct {
+		name          string
+		dataList      [][]int
+		want          []int
+		timesGenerate int
+	}{
+		{name: "one", dataList: [][]int{{1}}, want: []int{1}},
+		{name: "one close", dataList: [][]int{{2}}, want: []int{}},
+		{name: "two", dataList: [][]int{{1}, {-1, 0}}, want: []int{-1, 0, 1}},
+		{name: "multi", timesGenerate: 4, dataList: [][]int{{1}, {-1, 0}, {777, 555, 888, 111, 33333, 999, 999, 999}}, want: []int{-1, 0, 111, 555, 777, 888}},
+	}
 
-//func TestFlatSlicesToStreamFnFactory1(t *testing.T) {
-//	tests := []struct {
-//		name          string
-//		args          [][]int
-//		want          []int
-//		timesGenerate int
-//	}{
-//		{name: "one", args: [][]int{{1}}, want: []int{1}},
-//		{name: "two", args: [][]int{{1}, {-1, 0}}, want: []int{-1, 0, 1}},
-//		{name: "multi", args: [][]int{{1}, {-1, 0}, {777, 555, 888, 111, 33333, 999, 999, 999}}, want: []int{-1, 0, 1, 111, 555, 777, 888, 999, 33333}},
-//	}
-//
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//
-//			ctx, cancelFn := context.WithTimeout(context.Background(), time.Millisecond*100)
-//			defer cancelFn()
-//
-//			dataStream := pipeline.SliceToStreamInfinitelyGeneratorFactory[[][]int]().Run(ctx, tt.args)
-//			resultDataStream := pipeline.FlatSlicesToStreamFnFactory[[]int]().Run(ctx, dataStream)
-//
-//			var got []int
-//			for num := range pipeline.OrDoneFnFactory[int]().Run(ctx, resultDataStream) {
-//				got = append(got, num)
-//			}
-//
-//			slices.Sort(got)
-//			res := slices.Compact(got)
-//
-//			if len(res) != len(tt.want) {
-//				t.Errorf("%s = %v, want %v", t.Name(), res, tt.want)
-//			}
-//			for i, wantVal := range tt.want {
-//				if res[i] != wantVal {
-//					t.Errorf("%s = %v, want %v", t.Name(), res, tt.want)
-//				}
-//			}
-//		})
-//	}
-//}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 
-//func Test_SliceToStreamGenerator(t *testing.T) {
-//	tests := []struct {
-//		name string
-//		args []int
-//		want []int
-//	}{
-//		{name: "empty", args: []int{}, want: []int{}},
-//		{name: "oneInt", args: []int{1}, want: []int{1}},
-//		{name: "twoInt", args: []int{1, -1}, want: []int{1, -1}},
-//		{name: "tenInt", args: []int{1, -1, 23, 100, 26, 33, 78, 33, 221, 0}, want: []int{1, -1, 23, 100, 26, 33, 78, 33, 221, 0}},
-//	}
-//
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//
-//			ctxWithCancel, cancelFn := context.WithCancel(context.Background())
-//			defer cancelFn()
-//
-//			var got []int
-//			valStream := pipeline.SliceToStreamGeneratorFactory[[]int]().Run(ctxWithCancel, tt.args)
-//
-//			for num := range valStream {
-//				got = append(got, num)
-//			}
-//
-//			if len(got) != len(tt.want) {
-//				t.Errorf("Generator = %v, want %v", got, tt.want)
-//			}
-//
-//			for i, wantVal := range tt.want {
-//				if got[i] != wantVal {
-//					t.Errorf("Generator = %v, want %v", got, tt.want)
-//				}
-//			}
-//		})
-//	}
-//}
+			ctx, cancelFn := context.WithTimeout(context.Background(), time.Millisecond*1000)
+			defer cancelFn()
 
-//func Test_SliceToStreamInfinitelyRepeatGenerator(t *testing.T) {
-//	tests := []struct {
-//		name string
-//		args []int
-//		want []int
-//	}{
-//		{name: "empty", args: []int{}, want: []int{}},
-//		{name: "oneInt", args: []int{1}, want: []int{1}},
-//		{name: "twoInt", args: []int{1, -1}, want: []int{1, -1}},
-//		{name: "tenInt", args: []int{1, -1, 23, 100, 26, 33, 78, 33, 221, 0}, want: []int{1, -1, 23, 100, 26, 33, 78, 33, 221, 0}},
-//	}
-//
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//
-//			ctxWithCancel, cancelFn := context.WithCancel(context.Background())
-//
-//			var got []int
-//			valStream := pipeline.SliceToStreamRepeatGeneratorFactory[[]int]().Run(ctxWithCancel, tt.args)
-//
-//			go func() {
-//				defer cancelFn()
-//				time.Sleep(time.Microsecond * 1000)
-//			}()
-//
-//			for num := range valStream {
-//				got = append(got, num)
-//			}
-//
-//			t.Logf("%s got: %v", t.Name(), got)
-//			if len(got) < len(tt.want) {
-//				t.Errorf("%s = %v, want %v", t.Name(), got, tt.want)
-//			}
-//
-//			for i, wantVal := range tt.want {
-//				if got[i] != wantVal {
-//					t.Errorf("%s = %v, want %v", t.Name(), got, tt.want)
-//				}
-//			}
-//		})
-//	}
-//}
-//
-//func Test_FuncRepeatGenerator(t *testing.T) {
-//	tests := []struct {
-//		name string
-//		args  pipeline.GeneratorFunc[int]
-//		want []int
-//	}{
-//		{name: "oneInt", args: func() int {
-//			time.Sleep(time.Microsecond * 10)
-//			return 1
-//		}, want: []int{1}},
-//		{name: "twoInt", args: func() func() int {
-//			s := []int{1, -1}
-//			indx := 0
-//			return func() int {
-//				res := s[indx%2]
-//				indx += 1
-//				return res
-//			}
-//		}(), want: []int{1, -1}},
-//		{name: "tenInt", args: func() func() int {
-//			s := []int{1, -1, 23, 100, 26, 33, 78, 33, 221, 0}
-//			indx := 0
-//			return func() int {
-//				res := s[indx]
-//				indx += 1
-//				if indx >= len(s) {
-//					indx = 0
-//				}
-//				return res
-//			}
-//		}(), want: []int{1, -1, 23, 100, 26, 33, 78, 33, 221, 0}},
-//	}
-//
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//
-//			ctxWithCancel, cancelFn := context.WithCancel(context.Background())
-//
-//			var got []int
-//			valStream := pipeline.FnToStreamInfinitelyGenerateFnFactory[pipeline.GeneratorFunc[int]]().Run(ctxWithCancel, tt.args)
-//
-//			go func() {
-//				defer cancelFn()
-//				time.Sleep(time.Microsecond * 1000)
-//			}()
-//
-//			for num := range valStream {
-//				got = append(got, num)
-//			}
-//
-//			t.Logf("%s got: %v", t.Name(), got)
-//			if len(got) < len(tt.want) {
-//				t.Errorf("%s = %v, want %v", t.Name(), got, tt.want)
-//			}
-//
-//			for i, wantVal := range tt.want {
-//				if got[i] != wantVal {
-//					t.Errorf("%s = %v, want %v", t.Name(), got, tt.want)
-//				}
-//			}
-//		})
-//	}
-//}
+			dataStreams := make([]pl.ReadOnlyStream[int], 0, len(tt.dataList))
 
-//func TestOrDone2(t *testing.T) {
-//	tests := []struct {
-//		name string
-//		args  pipeline.GeneratorFunc[int]
-//		want []int
-//	}{
-//		{name: "oneInt", args: func() int {
-//			time.Sleep(time.Microsecond * 10)
-//			return 1
-//		}, want: []int{1}},
-//		{name: "twoInt", args: func() func() int {
-//			s := []int{1, -1}
-//			indx := 0
-//			return func() int {
-//				res := s[indx%2]
-//				indx += 1
-//				return res
-//			}
-//		}(), want: []int{1, -1}},
-//		{name: "tenInt", args: func() func() int {
-//			s := []int{1, -1, 23, 100, 26, 33, 78, 33, 221, 0}
-//			indx := 0
-//			return func() int {
-//				res := s[indx]
-//				indx += 1
-//				if indx >= len(s) {
-//					indx = 0
-//				}
-//				return res
-//			}
-//		}(), want: []int{1, -1, 23, 100, 26, 33, 78, 33, 221, 0}},
-//	}
-//
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//
-//			pCtx, cancelFn := context.WithCancel(context.Background())
-//
-//			var got []int
-//			valStream := pipeline.FnToStreamInfinitelyGenerateFnFactory[pipeline.GeneratorFunc[int]]()(pCtx, tt.args)
-//
-//			go func() {
-//				defer cancelFn()
-//				time.Sleep(time.Microsecond * 1000)
-//			}()
-//
-//			chCtx, _ := context.WithCancel(pCtx)
-//			for num := range pipeline.OrDoneFnFactory[int]().Run(chCtx, valStream) {
-//				got = append(got, num)
-//			}
-//
-//			t.Logf("%s got: %v", t.Name(), got)
-//			if len(got) < len(tt.want) {
-//				t.Errorf("%s = %v, want %v", t.Name(), got, tt.want)
-//			}
-//
-//			for i, wantVal := range tt.want {
-//				if got[i] != wantVal {
-//					t.Errorf("%s = %v, want %v", t.Name(), got, tt.want)
-//				}
-//			}
-//		})
-//	}
-//}
-//
-//func TestOrDone3(t *testing.T) {
-//	tests := []struct {
-//		name string
-//		args []int
-//		want []int
-//	}{
-//		{name: "empty", args: []int{}, want: []int{}},
-//		{name: "oneInt", args: []int{1}, want: []int{1}},
-//		{name: "twoInt", args: []int{1, -1}, want: []int{1, -1}},
-//		{name: "tenInt", args: []int{1, -1, 23, 100, 26, 33, 78, 33, 221, 0}, want: []int{1, -1, 23, 100, 26, 33, 78, 33, 221, 0}},
-//	}
-//
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//
-//			pCtx, cancelFn := context.WithCancel(context.Background())
-//
-//			var got []int
-//			valStream := pipeline.SliceToStreamRepeatGeneratorFactory[[]int]()(pCtx, tt.args)
-//
-//			go func() {
-//				defer cancelFn()
-//				time.Sleep(time.Microsecond * 1000)
-//			}()
-//
-//			chCtx, _ := context.WithCancel(pCtx)
-//			for num := range pipeline.OrDoneFnFactory[int]().Run(chCtx, valStream) {
-//				got = append(got, num)
-//			}
-//
-//			t.Logf("%s got: %v", t.Name(), got)
-//			if len(got) < len(tt.want) {
-//				t.Errorf("%s = %v, want %v", t.Name(), got, tt.want)
-//			}
-//
-//			for i, wantVal := range tt.want {
-//				if got[i] != wantVal {
-//					t.Errorf("%s = %v, want %v", t.Name(), got, tt.want)
-//				}
-//			}
-//		})
-//	}
-//}
-//
-//func TestMergeGenerator(t *testing.T) {
-//	tests := []struct {
-//		name string
-//		args [4][]int
-//		want []int
-//	}{
-//		{name: "empty", args: [4][]int{{}, {}, {}, {}}, want: []int{}},
-//		{name: "oneInt", args: [4][]int{{1}, {2}, {3}, {4}}, want: []int{1, 2, 3, 4}},
-//		{name: "twoInt", args: [4][]int{{1, 2}, {3, 4}, {5, 6}, {7, 8}}, want: []int{1, 2, 3, 4, 5, 6, 7, 8}},
-//		{name: "common", args: [4][]int{{1, 2}, {}, {5}, {7, 8, 9, 10}}, want: []int{1, 2, 5, 7, 8, 9, 10}},
-//	}
-//
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//
-//			ctxWithCancel, cancelFn := context.WithCancel(context.Background())
-//
-//			streams := make([]pipeline.ReadOnlyStream[int], 4)
-//			var got []int
-//			streams[0] = pipeline.SliceToStreamRepeatGeneratorFactory[[]int]()(ctxWithCancel, tt.args[0])
-//			streams[1] = pipeline.SliceToStreamRepeatGeneratorFactory[[]int]()(ctxWithCancel, tt.args[1])
-//			streams[2] = pipeline.SliceToStreamRepeatGeneratorFactory[[]int]()(ctxWithCancel, tt.args[2])
-//			streams[3] = pipeline.SliceToStreamRepeatGeneratorFactory[[]int]()(ctxWithCancel, tt.args[3])
-//
-//			go func() {
-//				defer cancelFn()
-//				time.Sleep(time.Microsecond * 1000)
-//			}()
-//
-//			chCtx, c := context.WithCancel(ctxWithCancel)
-//			defer c()
-//			for num := range pipeline.MergeFnFactory[[]pipeline.ReadOnlyStream[int]]()(chCtx, streams) {
-//				got = append(got, num)
-//			}
-//
-//			t.Logf("%s got: %v", t.Name(), got)
-//			if len(got) < len(tt.want) {
-//				t.Errorf("%s = %v, want %v", t.Name(), got, tt.want)
-//			}
-//
-//			slices.Sort(got)
-//			res := slices.Compact(got)
-//			for i, wantVal := range tt.want {
-//				if res[i] != wantVal {
-//					t.Errorf("%s = %v, want %v", t.Name(), res, tt.want)
-//				}
-//			}
-//		})
-//	}
-//}
+			switch tt.name {
+			case "one":
+				genHandler := pl.GeneratorHandlerFactory(pl.SliceGeneratorFuncFactory(tt.dataList[0]))
+				dataStream := pl.GeneratorStageFactory(genHandler).Run(ctx)
+				dataStreams = append(dataStreams, dataStream)
+			case "one close":
+				genHandler := pl.GeneratorHandlerFactory(pl.SliceGeneratorFuncFactory(tt.dataList[0]), genHandlerConf.WithTimesToGenerate(1000))
+				dataStream := pl.GeneratorStageFactory(genHandler).Run(ctx)
+				dataStreams = append(dataStreams, dataStream)
+
+				waitFor1 := pl.NoOpSubFnFactory[int]()(ctx, dataStream)
+				<-waitFor1.Done()
+			case "two":
+				for i := 0; i < len(tt.dataList); i++ {
+					genHandler := pl.GeneratorHandlerFactory(pl.SliceGeneratorFuncFactory(tt.dataList[i]))
+					dataStream := pl.GeneratorStageFactory(genHandler).Run(ctx)
+					dataStreams = append(dataStreams, dataStream)
+				}
+			case "multi":
+				mCtx1, mCancelFn := context.WithTimeout(context.Background(), time.Millisecond*10)
+				defer mCancelFn()
+				genHandler1 := pl.GeneratorHandlerFactory(pl.SliceGeneratorFuncFactory(tt.dataList[0]))
+				dataStream1 := pl.GeneratorStageFactory(genHandler1).Run(mCtx1)
+				dataStreams = append(dataStreams, dataStream1)
+				// wait and close dataStream1
+				waitFor1 := pl.NoOpSubFnFactory[int]()(ctx, dataStream1)
+				select {
+				case <-waitFor1.Done():
+					t.Log("dataStream1 is closed")
+				}
+
+				// dataStream2 will be closed after 1 time generation of all elements
+				genHandler2 := pl.GeneratorHandlerFactory(pl.SliceGeneratorFuncFactory(tt.dataList[1]),
+					genHandlerConf.WithTimesToGenerate(1000))
+				dataStream2 := pl.GeneratorStageFactory(genHandler2).Run(ctx)
+				dataStreams = append(dataStreams, dataStream2)
+
+				// dataStream2 will be closed after 1 time generation of all elements
+				genHandler3 := pl.GeneratorHandlerFactory(pl.SliceGeneratorFuncFactory(tt.dataList[2]),
+					genHandlerConf.WithTimesToGenerate(4))
+				dataStream3 := pl.GeneratorStageFactory(genHandler3).Run(ctx)
+				dataStreams = append(dataStreams, dataStream3)
+			}
+
+			resultDataStream := pl.MergeFnFactory[[]pl.ReadOnlyStream[int]]().Run(ctx, dataStreams)
+
+			t.Logf("%s data resiving", t.Name())
+			var got = make([]int, 0, 100)
+			for num := range pl.OrDoneFnFactory[int]().Run(ctx, resultDataStream) {
+				got = append(got, num)
+			}
+
+			//log.Default().Println(got)
+			slices.Sort(got)
+			res := slices.Compact(got)
+
+			assert.Equal(t, tt.want, res)
+		})
+	}
+}
+
+func TestFlatSlicesToStreamFnFactory1(t *testing.T) {
+	tests := []struct {
+		name          string
+		args          [][]int
+		want          []int
+		timesGenerate int
+	}{
+		{name: "one", args: [][]int{{1}}, want: []int{1}},
+		{name: "two", args: [][]int{{1}, {-1, 0}}, want: []int{-1, 0, 1}},
+		{name: "multi", args: [][]int{{1}, {-1, 0}, {777, 555, 888, 111, 33333, 999, 999, 999}}, want: []int{-1, 0, 1, 111, 555, 777, 888, 999, 33333}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			ctx, cancelFn := context.WithTimeout(context.Background(), time.Millisecond*300)
+			defer cancelFn()
+
+			genHandler := pl.GeneratorHandlerFactory(pl.SliceGeneratorFuncFactory(tt.args))
+			dataStream := pl.GeneratorStageFactory(genHandler).Run(ctx)
+			resultStream := pl.FlatSlicesToStreamFnFactory[[]int]().Run(ctx, dataStream)
+
+			var got []int
+			for num := range pl.OrDoneFnFactory[int]().Run(ctx, resultStream) {
+				got = append(got, num)
+			}
+
+			//log.Default().Println(got)
+			slices.Sort(got)
+			res := slices.Compact(got)
+
+			assert.Equal(t, tt.want, res)
+		})
+	}
+}

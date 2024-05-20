@@ -63,15 +63,64 @@ func ProcessStageFactory[T, RS any](processFunc ProcessHandler[T, RS]) StageFn[T
 		go func() {
 			defer close(outStream)
 			for inObj := range OrDoneFnFactory[T]().Run(ctx, inStream) {
-				outObj, ignoreIt := processFunc.HandleIt(inObj)
-				if ignoreIt {
-					continue
+				{
+					select {
+					case <-ctx.Done():
+						return
+					default:
+						outObj, ignoreIt := processFunc.HandleIt(inObj)
+						if ignoreIt {
+							continue
+						}
+						select {
+						case <-ctx.Done():
+							return
+						case outStream <- outObj:
+						}
+					}
 				}
-				select {
-				case <-ctx.Done():
-					return
-				case outStream <- outObj:
+
+			}
+		}()
+		return outStream
+	}
+}
+
+// ProcessStageFactory makes a standard stage function. (wraps a given ProcessFn).
+// StageFn functions types accepts an inStream and returns an outStream
+// (to chain multiple stages into a pipeline)
+func ProcessStageFactoryTest[T, RS any](processFunc ProcessHandler[T, RS]) StageFn[T, RS] {
+	return func(ctx context.Context, inStream ReadOnlyStream[T]) ReadOnlyStream[RS] {
+		outStream := make(chan RS)
+		go func() {
+			defer close(outStream)
+			for inObj := range OrDoneFnFactory[T]().Run(ctx, inStream) {
+				{
+					select {
+					case <-ctx.Done():
+						return
+					default:
+						//genFunc := func() ReadOnlyStream[RS] {
+						//	tempOutStream := make(chan RS)
+						//
+						//	return func() RS {
+						//		outObj, ignoreIt := processFunc.HandleIt(inObj)
+						//	}
+						//	return tempOutStream
+						//}
+						//GeneratorHandlerFactory()
+						outObj, ignoreIt := processFunc.HandleIt(inObj)
+						if ignoreIt {
+							continue
+						}
+						select {
+						case <-ctx.Done():
+							return
+						case outStream <- outObj:
+						}
+					}
 				}
+
 			}
 		}()
 		return outStream

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	genHandlerConf "github.com/lissdx/yapgo2/pkg/pipeline/config/generator/config_generator_handler"
+	"go.uber.org/goleak"
 	"log"
 	"math/rand"
 	"testing"
@@ -15,6 +16,8 @@ import (
 
 // Random int generation (10 times generation) example
 func TestExample_GeneratorFactoryWithTimesToGenerate(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	timesToGenerate := 10
 	// Custom generator
 	genFunc := func() int {
@@ -48,6 +51,8 @@ func TestExample_GeneratorFactoryWithTimesToGenerate(t *testing.T) {
 
 // Random int generation never ended  example
 func TestExample_GeneratorFactoryWithOutTimesToGenerate(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	// Use predefined GeneratorFunc factory
 	genFunc := RandomIntGeneratorFuncFactory(1001)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond*300)
@@ -75,6 +80,7 @@ func TestExample_GeneratorFactoryWithOutTimesToGenerate(t *testing.T) {
 // with a Middleware function(s)
 // Random int generation never ended
 func TestExample_GeneratorFactoryWithMiddleWare(t *testing.T) {
+	defer goleak.VerifyNone(t)
 
 	genFunc := RandomIntGeneratorFuncFactory(1001)
 
@@ -103,6 +109,7 @@ func TestExample_GeneratorFactoryWithMiddleWare(t *testing.T) {
 // generate data len(slice) times
 // simplest way (without type annotation)
 func TestExample_SliceGeneratorWithMiddleWare(t *testing.T) {
+	defer goleak.VerifyNone(t)
 
 	data := []int{10, 20, 30, 40, 50, 60, 70, 80, 90, 100}
 	genFunc := SliceGeneratorFuncFactory(data)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	genHandlerConf "github.com/lissdx/yapgo2/pkg/pipeline/config/generator/config_generator_handler"
+	"go.uber.org/goleak"
 	"log"
 	"math/rand"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 // TestExample_SimplePipeline base usage
 func TestExample_SimplePipeline(t *testing.T) {
+	defer goleak.VerifyNone(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
@@ -44,6 +46,7 @@ func TestExample_SimplePipeline(t *testing.T) {
 
 // TestExample_PipelineWithCustomErrorHandler add the custom error handler
 func TestExample_PipelineWithCustomErrorHandler(t *testing.T) {
+	defer goleak.VerifyNone(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -106,6 +109,7 @@ func TestExample_PipelineWithCustomErrorHandler(t *testing.T) {
 // TestExample_PipelineWithFilterAndErrorIgnore filter and error ignore
 // (custom middleware implementation)
 func TestExample_PipelineWithFilterAndErrorIgnore(t *testing.T) {
+	defer goleak.VerifyNone(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -198,6 +202,7 @@ func TestExample_PipelineWithFilterAndErrorIgnore(t *testing.T) {
 // DrainGuarantee
 // Context close our stages in the random order
 func TestExample_PipelineNoDrainGuarantee(t *testing.T) {
+	defer goleak.VerifyNone(t)
 
 	// create a context with 1sec timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
@@ -229,14 +234,25 @@ func TestExample_PipelineNoDrainGuarantee(t *testing.T) {
 	quiteLongProcessFunc := func() ProcessFn[int, int] {
 		return func(i int) (int, error) {
 			waitForMlSec := rand.Intn(1000-100) + 100
-			<-time.After(time.Duration(waitForMlSec) * time.Millisecond)
+			stubCtx, stubCancel := context.WithTimeout(context.Background(), time.Duration(waitForMlSec)*time.Millisecond)
+			defer stubCancel()
+			<-stubCtx.Done()
+			//time.Sleep(time.
+			//Duration(waitForMlSec) * time.Millisecond)
+			//for ii := 0; ii < 100_000; ii++ {
+			//	for bb := 0; bb < 10000; bb++ {
+			//
+			//	}
+			//}
 			return i, nil
 		}
 	}()
 	intToStringProcessFunc := func() ProcessFn[int, string] {
 		return func(i int) (string, error) {
 			waitForMlSec := rand.Intn(1000-100) + 100
-			<-time.After(time.Duration(waitForMlSec) * time.Millisecond)
+			stubCtx, stubCancel := context.WithTimeout(context.Background(), time.Duration(waitForMlSec)*time.Millisecond)
+			defer stubCancel()
+			<-stubCtx.Done()
 			return fmt.Sprintf("%d", i), nil
 		}
 	}()
@@ -254,12 +270,16 @@ func TestExample_PipelineNoDrainGuarantee(t *testing.T) {
 	genDataStream := generatorStage.Run(ctx)
 	quiteLongProcessWitFanOut1OutStream := quiteLongProcessWitFanOutStage1.Run(ctx, genDataStream)
 	quiteLongProcessWitFanOut2OutStream := quiteLongProcessWitFanOutStage2.Run(ctx, quiteLongProcessWitFanOut1OutStream)
+	//quiteLongProcessWitFanOut2OutStream := quiteLongProcessWitFanOut1OutStream
 	resStream := intToStringStage.Run(ctx, quiteLongProcessWitFanOut2OutStream)
+
 	//processStream := quiteLongProcessWitFanOutStage1.Run(ctx, genDataStream)
 	//filterStream := filterStage.Run(ctx, processStream)
 
 	evenCount := 0
-	for range OrDoneFnFactory[string]().Run(ctx, resStream) {
+	finalContext, fcCancel := context.WithCancel(context.Background())
+	defer fcCancel()
+	for range OrDoneFnFactory[string]().Run(finalContext, resStream) {
 		//t.Log("In the end ve GOT:", v)
 		evenCount++
 	}
@@ -273,6 +293,7 @@ func TestExample_PipelineNoDrainGuarantee(t *testing.T) {
 // DrainGuarantee
 // so lets pass the independent Contexts
 func TestExample_PipelineDrainGuarantee(t *testing.T) {
+	defer goleak.VerifyNone(t)
 
 	// Set up the data generator
 	// get generator function (just random int generator)
@@ -335,24 +356,17 @@ func TestExample_PipelineDrainGuarantee(t *testing.T) {
 	// create a context with 1sec timeout
 	ctx1, cancel1 := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel1()
-	genDataStream := generatorStage.Run(ctx1)
 
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
+
+	genDataStream := generatorStage.Run(ctx1)
 	quiteLongProcessWitFanOut1OutStream := quiteLongProcessWitFanOutStage1.Run(ctx2, genDataStream)
+	quiteLongProcessWitFanOut2OutStream := quiteLongProcessWitFanOutStage2.Run(ctx2, quiteLongProcessWitFanOut1OutStream)
+	resStream := intToStringStage.Run(ctx2, quiteLongProcessWitFanOut2OutStream)
 
-	ctx3, cancel3 := context.WithCancel(context.Background())
-	defer cancel3()
-	quiteLongProcessWitFanOut2OutStream := quiteLongProcessWitFanOutStage2.Run(ctx3, quiteLongProcessWitFanOut1OutStream)
-
-	ctx4, cancel4 := context.WithCancel(context.Background())
-	defer cancel4()
-	resStream := intToStringStage.Run(ctx4, quiteLongProcessWitFanOut2OutStream)
-
-	ctx5, cancel5 := context.WithCancel(context.Background())
-	defer cancel5()
 	evenCount := 0
-	for _ = range OrDoneFnFactory[string]().Run(ctx5, resStream) {
+	for _ = range OrDoneFnFactory[string]().Run(ctx2, resStream) {
 		//t.Log("In the end ve GOT:", v)
 		evenCount++
 	}
