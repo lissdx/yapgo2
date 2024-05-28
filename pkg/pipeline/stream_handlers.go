@@ -2,7 +2,9 @@ package pipeline
 
 import (
 	"context"
-	"sync"
+	"fmt"
+	cnfStreamHandler "github.com/lissdx/yapgo2/pkg/pipeline/config/stream_handler"
+	"golang.org/x/sync/errgroup"
 )
 
 // StreamToStreamHandler should implement the handle processing
@@ -29,7 +31,7 @@ func (sss StreamsToStreamHandler[S, RS]) Run(ctx context.Context, inStreams S) R
 // also selects from a done context.
 // Example:
 //
-//	for val := range OrDoneFnFactory[int]().Run(ctx, inStream) {
+//	for val := range OrDoneFnFactory[int]().GenerateToStream(ctx, inStream) {
 //	  ...Do something with val
 //	}
 func OrDoneFnFactory[T any]() StreamToStreamHandler[T, T] {
@@ -61,39 +63,65 @@ func OrDoneFnFactory[T any]() StreamToStreamHandler[T, T] {
 // MergeFnFactory
 // wrap our reading from multiple channels with a select statement that
 // also selects from a context (ctx.Done()).
-// sends all given data from channel list ([]ReadOnlyStream[T])
+// sends all given data from channel list ([]ReadOnlyStream[IN])
 // to output channel only
-func MergeFnFactory[S ~[]ReadOnlyStream[T], T any]() StreamsToStreamHandler[S, T] {
+func MergeFnFactory[S ~[]ReadOnlyStream[T], T any](options ...cnfStreamHandler.Option) StreamsToStreamHandler[S, T] {
+
+	conf := cnfStreamHandler.NewStreamHandlerConfig(options...)
+	loggerPref := fmt.Sprintf("MergeFnFactory_%s", conf.Name())
 
 	return func(ctx context.Context, inStreams S) ReadOnlyStream[T] {
 		outStream := make(chan T)
-		var wg sync.WaitGroup
-		wg.Add(len(inStreams))
 
-		for _, inStream := range inStreams {
-			go func(dataStream ReadOnlyStream[T]) {
-				defer wg.Done()
-				for vData := range OrDoneFnFactory[T]().Run(ctx, dataStream) {
+		g, ctx := errgroup.WithContext(ctx)
+
+		for i, inStream := range inStreams {
+			lInStream := inStream
+			indx := i
+			g.Go(func() error {
+
+				logPref := fmt.Sprintf("%s_%d", loggerPref, indx)
+				conf.Logger().Info("%s_%d: MergeFnFactory started", logPref, indx)
+
+			exit:
+				for {
 					select {
 					case <-ctx.Done():
-						return
-					case outStream <- vData:
+						conf.Logger().Debug("%s: Got <-ctx.Done(). MergeFnFactory", logPref)
+						return ctx.Err()
+					case vData, ok := <-lInStream:
+						if !ok {
+							break exit
+						}
+						select {
+						case <-ctx.Done():
+							return fmt.Errorf("%s: MergeFnFactory was interrupted. Data was fetched but got <-ctx.Done(). context error: %w",
+								logPref, ctx.Err())
+						case outStream <- vData:
+						}
 					}
 				}
-			}(inStream)
+
+				conf.Logger().Debug("%s: MergeFnFactory input stream closed", logPref)
+				return nil
+			})
 		}
 
 		go func() {
 			defer close(outStream)
-			wg.Wait()
+			if err := g.Wait(); err != nil {
+				conf.Logger().Error("%s: MergeFnFactory error: %s", loggerPref, err.Error())
+			}
+			conf.Logger().Info("%s: MergeFnFactory all processes was stopped", loggerPref)
+			conf.Logger().Info("%s: MergeFnFactory close outStream", loggerPref)
 		}()
 
 		return outStream
 	}
 }
 
-// FlatSlicesToStreamFnFactory flats slices []T given via inStream
-// into flat data T and sends them one by one to the outStream
+// FlatSlicesToStreamFnFactory flats slices []IN given via inStream
+// into flat data IN and sends them one by one to the outStream
 func FlatSlicesToStreamFnFactory[S ~[]T, T any]() StreamToStreamHandler[S, T] {
 	return func(ctx context.Context, inStream ReadOnlyStream[S]) ReadOnlyStream[T] {
 		outStream := make(chan T)

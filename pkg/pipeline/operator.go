@@ -7,8 +7,8 @@ package pipeline
 // in and sends the slices’ values on the channel it created.
 // Note - send on the channel shares a select statement with a selection on the ctx.Done().
 // Again, this is the pattern we established in “Preventing Goroutine Leaks” to guard against leaking goroutines.
-//func Generator[T any](ctx context.Context, values ...T) ReadOnlyStream[T] {
-//	outStream := make(chan T, len(values))
+//func Generator[IN any](ctx context.Context, values ...IN) ReadOnlyStream[IN] {
+//	outStream := make(chan IN, len(values))
 //	go func() {
 //		defer close(outStream)
 //		for _, v := range values {

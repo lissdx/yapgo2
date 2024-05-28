@@ -29,7 +29,7 @@ func (p *processResult[T]) ProcessResult() T {
 }
 
 func (p *processResult[T]) IsOmitted() bool {
-	return p.omitted
+	return p == nil || p.omitted
 }
 
 func NewOmittedProcessResult[T any]() ProcessResultCarrier[T] {
