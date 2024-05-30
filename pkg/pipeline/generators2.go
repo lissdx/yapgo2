@@ -72,7 +72,7 @@ func GeneratorProducerFactory[T any, ROS ReadOnlyStream[T]](genFuncHandler Gener
 					select {
 					case <-ctx.Done():
 						genProducerConfig.Logger().Debug("%s: Got <-ctx.Done(). GeneratorProducerFactory sent %d items", loggerPref, genCount)
-						return fmt.Errorf("%s: GeneratorProducerFactory was interrupted. Sent items: %d (from %d). context error: %w",
+						return fmt.Errorf("%s: GeneratorProducerFactory was interrupted. Sent items: %d (insead of %d). context error: %w",
 							loggerPref, genCount, genProducerConfig.TimesToGenerate(), ctx.Err())
 					case outStream <- genFuncHandler.GenerateData():
 					}
@@ -129,9 +129,6 @@ func GeneratorProducerFactory[T any, ROS ReadOnlyStream[T]](genFuncHandler Gener
 	}
 }
 
-//func SugarGeneratorProducerFactory[T any, ROS ReadOnlyStream[T]]( generatorFunc GeneratorFunc[], options ...genProdConf.Option)ToStreamGenerator[T, ROS] {
-//
-//}
 /*
  *
  * Simple Generator function part

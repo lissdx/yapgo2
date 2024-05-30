@@ -226,7 +226,7 @@ func TestExample_PipelineWithFanOutAndDrainGuarantee(t *testing.T) {
 	defer goleak.VerifyNone(t)
 	timesToGenerate := uint(100)
 	stageName1 := "quiteLongProcessFunc"
-	//stageName_2 := "intToStringProcessFunc"
+	stageName2 := "intToStringProcessFunc"
 	// create a context with 1sec timeout
 	//ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	//defer cancel()
@@ -251,319 +251,45 @@ func TestExample_PipelineWithFanOutAndDrainGuarantee(t *testing.T) {
 			return i, nil
 		}
 	}()
-	//intToStringProcessFunc := func() ProcessFn[int, string] {
-	//	return func(i int) (string, error) {
-	//		waitForMlSec := rand.Intn(1000-100) + 100
-	//		stubCtx, stubCancel := context.WithTimeout(context.Background(), time.Duration(waitForMlSec)*time.Millisecond)
-	//		defer stubCancel()
-	//		<-stubCtx.Done()
-	//		return fmt.Sprintf("%d", i), nil
-	//	}
-	//}()
+	intToStringProcessFunc := func() ProcessFn[int, string] {
+		return func(i int) (string, error) {
+			waitForMlSec := rand.Intn(1000-100) + 100
+			stubCtx, stubCancel := context.WithTimeout(context.Background(), time.Duration(waitForMlSec)*time.Millisecond)
+			defer stubCancel()
+			<-stubCtx.Done()
+			return fmt.Sprintf("%d", i), nil
+		}
+	}()
 
 	quiteLongProcessFnHandler := ProcessHandlerFactory(quiteLongProcessFunc)
-	//intToStringHandler := ProcessHandlerFactory(intToStringProcessFunc,
-	//	cnfProcStage.WithLogger(plLogger),
-	//	cnfProcStage.WithName(stageName_2))
+	intToStringHandler := ProcessHandlerFactory(intToStringProcessFunc)
 
 	quiteLongProcessWitFanOutStage1 := ProcessStageFactoryWithFanOut(quiteLongProcessFnHandler, 5,
 		cnfProcStage.WithName(stageName1), cnfProcStage.WithLogger(plLogger))
-	//quiteLongProcessWitFanOutStage2 := ProcessStageFactoryWithFanOut(quiteLongProcessFnHandler, 100)
-	//intToStringStage := ProcessStageFactory(intToStringHandler)
+	intToStringStageWitFanOutStage := ProcessStageFactoryWithFanOut(intToStringHandler, 3,
+		cnfProcStage.WithName(stageName2), cnfProcStage.WithLogger(plLogger))
 
 	//
 	// GenerateToStream Stages
 	//
+	// genCtx will stop the data generator
 	genCtx, genCancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer genCancel()
 	genDataStream := generatorHandler.GenerateToStream(genCtx)
+
+	// we want to drain out pipeline,
+	// so we are waiting for te channel closing
+	// (we do not use the same control context)
 	stg1Ctx, stg1Cancel := context.WithCancel(context.Background())
 	defer stg1Cancel()
 	quiteLongProcessWitFanOut1OutStream := quiteLongProcessWitFanOutStage1.Run(stg1Ctx, genDataStream)
-	//quiteLongProcessWitFanOut2OutStream := quiteLongProcessWitFanOutStage2.GenerateToStream(ctx, quiteLongProcessWitFanOut1OutStream)
-	//quiteLongProcessWitFanOut2OutStream := quiteLongProcessWitFanOut1OutStream
-	//resStream := intToStringStage.GenerateToStream(ctx, quiteLongProcessWitFanOut2OutStream)
-
-	//processStream := quiteLongProcessWitFanOutStage1.GenerateToStream(ctx, genDataStream)
-	//filterStream := filterStage.GenerateToStream(ctx, processStream)
+	intToStringWitFanOut1OutStream := intToStringStageWitFanOutStage.Run(stg1Ctx, quiteLongProcessWitFanOut1OutStream)
 
 	evenCount := 0
-	//finalContext, fcCancel := context.WithCancel(context.Background())
-	//defer fcCancel()
-	for v := range quiteLongProcessWitFanOut1OutStream {
+	for v := range intToStringWitFanOut1OutStream {
 		plLogger.Trace("Got value: %+v", v)
 		evenCount++
 	}
 
-	plLogger.Debug("Total events processed: ", evenCount)
+	plLogger.Debug("Total events processed: %d", evenCount)
 }
-
-//// TestExample_PipelineNoDrainGuarantee
-//// in case of using the same Context there is no
-//// DrainGuarantee
-//// Context close our stages in the random order
-//func TestExample_PipelineNoDrainGuarantee(t *testing.IN) {
-//	defer goleak.VerifyNone(t)
-//
-//	// create a context with 1sec timeout
-//	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-//	defer cancel()
-//
-//	// Set up the data generator
-//	// get generator function (just random int generator)
-//	genFunc := RandomIntGeneratorFuncFactory(100)
-//	// wrap the function with handler
-//	generatorHandler := GeneratorHandlerFactory(genFunc)
-//
-//	// create counter middleware
-//	genCounter := 0
-//	counterMiddleware := func(next GeneratorHandler[int]) GeneratorHandler[int] {
-//		return GeneratorHandlerFunc[int](func() (int, bool) {
-//			defer func() {
-//				genCounter++
-//			}()
-//			return next.GenerateIt()
-//		})
-//	}
-//
-//	// init generator stage
-//	generatorStage := GeneratorStageFactory(counterMiddleware(generatorHandler))
-//
-//	//
-//	// Process Part
-//	//
-//	quiteLongProcessFunc := func() ProcessFn[int, int] {
-//		return func(i int) (int, error) {
-//			waitForMlSec := rand.Intn(1000-100) + 100
-//			stubCtx, stubCancel := context.WithTimeout(context.Background(), time.Duration(waitForMlSec)*time.Millisecond)
-//			defer stubCancel()
-//			<-stubCtx.Done()
-//			//time.Sleep(time.
-//			//Duration(waitForMlSec) * time.Millisecond)
-//			//for ii := 0; ii < 100_000; ii++ {
-//			//	for bb := 0; bb < 10000; bb++ {
-//			//
-//			//	}
-//			//}
-//			return i, nil
-//		}
-//	}()
-//	intToStringProcessFunc := func() ProcessFn[int, string] {
-//		return func(i int) (string, error) {
-//			waitForMlSec := rand.Intn(1000-100) + 100
-//			stubCtx, stubCancel := context.WithTimeout(context.Background(), time.Duration(waitForMlSec)*time.Millisecond)
-//			defer stubCancel()
-//			<-stubCtx.Done()
-//			return fmt.Sprintf("%d", i), nil
-//		}
-//	}()
-//
-//	quiteLongProcessFnHandler := ProcessHandlerFactory(quiteLongProcessFunc)
-//	intToStringHandler := ProcessHandlerFactory(intToStringProcessFunc)
-//
-//	quiteLongProcessWitFanOutStage1 := ProcessStageFactoryWithFanOut(quiteLongProcessFnHandler, 1000)
-//	quiteLongProcessWitFanOutStage2 := ProcessStageFactoryWithFanOut(quiteLongProcessFnHandler, 100)
-//	intToStringStage := ProcessStageFactory(intToStringHandler)
-//
-//	//
-//	// GenerateToStream Stages
-//	//
-//	genDataStream := generatorStage.GenerateToStream(ctx)
-//	quiteLongProcessWitFanOut1OutStream := quiteLongProcessWitFanOutStage1.GenerateToStream(ctx, genDataStream)
-//	quiteLongProcessWitFanOut2OutStream := quiteLongProcessWitFanOutStage2.GenerateToStream(ctx, quiteLongProcessWitFanOut1OutStream)
-//	//quiteLongProcessWitFanOut2OutStream := quiteLongProcessWitFanOut1OutStream
-//	resStream := intToStringStage.GenerateToStream(ctx, quiteLongProcessWitFanOut2OutStream)
-//
-//	//processStream := quiteLongProcessWitFanOutStage1.GenerateToStream(ctx, genDataStream)
-//	//filterStream := filterStage.GenerateToStream(ctx, processStream)
-//
-//	evenCount := 0
-//	finalContext, fcCancel := context.WithCancel(context.Background())
-//	defer fcCancel()
-//	for range OrDoneFnFactory[string]().GenerateToStream(finalContext, resStream) {
-//		//t.Log("In the end ve GOT:", v)
-//		evenCount++
-//	}
-//
-//	t.Log("Total events generated: ", genCounter)
-//	t.Log("Total events processed: ", evenCount)
-//}
-
-//// TestExample_PipelineDrainGuarantee
-//// in case of using the same Context there is no
-//// DrainGuarantee
-//// so lets pass the independent Contexts
-//func TestExample_PipelineDrainGuarantee(t *testing.IN) {
-//	defer goleak.VerifyNone(t)
-//
-//	// Set up the data generator
-//	// get generator function (just random int generator)
-//	genFunc := RandomIntGeneratorFuncFactory(100)
-//	// wrap the function with handler
-//	generatorHandler := GeneratorHandlerFactory(genFunc)
-//
-//	// create counter middleware
-//	genCounter := 0
-//	counterMiddleware := func(next GeneratorHandler[int]) GeneratorHandler[int] {
-//		return GeneratorHandlerFunc[int](func() (int, bool) {
-//			defer func() {
-//				genCounter++
-//			}()
-//			return next.GenerateIt()
-//		})
-//	}
-//
-//	// init generator stage
-//	// Lets use UnsafeGeneratorStageFactory instead of GeneratorStageFactory
-//	// UnsafeGeneratorStageFactory is potentially dangerous
-//	generatorStage := UnsafeGeneratorStageFactory(counterMiddleware(generatorHandler))
-//
-//	//
-//	// Process Part
-//	//
-//	quiteLongProcessFunc1 := func() ProcessFn[int, int] {
-//		return func(i int) (int, error) {
-//			waitForMlSec := rand.Intn(1000-100) + 100
-//			<-time.After(time.Duration(waitForMlSec) * time.Millisecond)
-//			return i, nil
-//		}
-//	}()
-//	quiteLongProcessFunc2 := func() ProcessFn[int, int] {
-//		return func(i int) (int, error) {
-//			waitForMlSec := rand.Intn(200-20) + 20
-//			<-time.After(time.Duration(waitForMlSec) * time.Millisecond)
-//			return i, nil
-//		}
-//	}()
-//	intToStringProcessFunc := func() ProcessFn[int, string] {
-//		return func(i int) (string, error) {
-//			waitForMlSec := rand.Intn(10-1) + 1
-//			<-time.After(time.Duration(waitForMlSec) * time.Millisecond)
-//			return fmt.Sprintf("to string: %d", i), nil
-//		}
-//	}()
-//	//
-//	quiteLongProcessFnHandler1 := ProcessHandlerFactory(quiteLongProcessFunc1)
-//	quiteLongProcessFnHandler2 := ProcessHandlerFactory(quiteLongProcessFunc2)
-//	intToStringHandler := ProcessHandlerFactory(intToStringProcessFunc)
-//
-//	quiteLongProcessWitFanOutStage1 := ProcessStageFactoryWithFanOut(quiteLongProcessFnHandler1, 1000)
-//	quiteLongProcessWitFanOutStage2 := ProcessStageFactoryWithFanOut(quiteLongProcessFnHandler2, 300)
-//	intToStringStage := ProcessStageFactory(intToStringHandler)
-//
-//	//
-//	// GenerateToStream Stages
-//	//
-//	// create a context with 1sec timeout
-//	ctx1, cancel1 := context.WithTimeout(context.Background(), 1*time.Second)
-//	defer cancel1()
-//
-//	ctx2, cancel2 := context.WithCancel(context.Background())
-//	defer cancel2()
-//
-//	genDataStream := generatorStage.GenerateToStream(ctx1)
-//	quiteLongProcessWitFanOut1OutStream := quiteLongProcessWitFanOutStage1.GenerateToStream(ctx2, genDataStream)
-//	quiteLongProcessWitFanOut2OutStream := quiteLongProcessWitFanOutStage2.GenerateToStream(ctx2, quiteLongProcessWitFanOut1OutStream)
-//	resStream := intToStringStage.GenerateToStream(ctx2, quiteLongProcessWitFanOut2OutStream)
-//
-//	evenCount := 0
-//	for _ = range OrDoneFnFactory[string]().GenerateToStream(ctx2, resStream) {
-//		//t.Log("In the end ve GOT:", v)
-//		evenCount++
-//	}
-//
-//	t.Log("Total events generated: ", genCounter)
-//	t.Log("Total events processed: ", evenCount)
-//}
-
-//// TestExample_PipelineNoDrainGuarantee
-//// in case of using the same Context there is no
-//// DrainGuarantee
-//// Context close our stages in the random order
-//func TestExample_PipelineNoDrainGuaranteeSpecialGenFunction(t *testing.IN) {
-//	defer goleak.VerifyNone(t)
-//
-//	// create a context with 1sec timeout
-//	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-//	defer cancel()
-//
-//	// Set up the data generator
-//	// get generator function (just random int generator)
-//	genFunc := RandomIntGeneratorFuncFactory(100)
-//	// wrap the function with handler
-//	generatorHandler := GeneratorHandlerFactory(genFunc)
-//
-//	// create counter middleware
-//	genCounter := 0
-//	counterMiddleware := func(next GeneratorHandler[int]) GeneratorHandler[int] {
-//		return GeneratorHandlerFunc[int](func() (int, bool) {
-//			defer func() {
-//				genCounter++
-//			}()
-//			return next.GenerateIt()
-//		})
-//	}
-//
-//	// init generator stage
-//	generatorStage := GeneratorStageFactory(counterMiddleware(generatorHandler))
-//
-//	//
-//	// Process Part
-//	//
-//	quiteLongProcessFunc := func() ProcessFn[int, int] {
-//		return func(i int) (int, error) {
-//			waitForMlSec := rand.Intn(1000-100) + 100
-//			stubCtx, stubCancel := context.WithTimeout(context.Background(), time.Duration(waitForMlSec)*time.Millisecond)
-//			defer stubCancel()
-//			<-stubCtx.Done()
-//			//time.Sleep(time.
-//			//Duration(waitForMlSec) * time.Millisecond)
-//			//for ii := 0; ii < 100_000; ii++ {
-//			//	for bb := 0; bb < 10000; bb++ {
-//			//
-//			//	}
-//			//}
-//			return i, nil
-//		}
-//	}()
-//
-//	intToStringProcessFunc := func() ProcessFn[int, string] {
-//		return func(i int) (string, error) {
-//			waitForMlSec := rand.Intn(1000-100) + 100
-//			stubCtx, stubCancel := context.WithTimeout(context.Background(), time.Duration(waitForMlSec)*time.Millisecond)
-//			defer stubCancel()
-//			<-stubCtx.Done()
-//			return fmt.Sprintf("%d", i), nil
-//		}
-//	}()
-//
-//	quiteLongProcessFnHandler := ProcessHandlerFactory(quiteLongProcessFunc)
-//	intToStringHandler := ProcessHandlerFactory(intToStringProcessFunc)
-//
-//	quiteLongProcessWitFanOutStage1 := ProcessStageFactoryWithFanOut(quiteLongProcessFnHandler, 1000)
-//	quiteLongProcessWitFanOutStage2 := ProcessStageFactoryWithFanOut(quiteLongProcessFnHandler, 100)
-//	intToStringStage := ProcessStageFactory(intToStringHandler)
-//
-//	//
-//	// GenerateToStream Stages
-//	//
-//	genDataStream := generatorStage.GenerateToStream(ctx)
-//	quiteLongProcessWitFanOut1OutStream := quiteLongProcessWitFanOutStage1.GenerateToStream(ctx, genDataStream)
-//	quiteLongProcessWitFanOut2OutStream := quiteLongProcessWitFanOutStage2.GenerateToStream(ctx, quiteLongProcessWitFanOut1OutStream)
-//	//quiteLongProcessWitFanOut2OutStream := quiteLongProcessWitFanOut1OutStream
-//	resStream := intToStringStage.GenerateToStream(ctx, quiteLongProcessWitFanOut2OutStream)
-//
-//	//processStream := quiteLongProcessWitFanOutStage1.GenerateToStream(ctx, genDataStream)
-//	//filterStream := filterStage.GenerateToStream(ctx, processStream)
-//
-//	evenCount := 0
-//	finalContext, fcCancel := context.WithCancel(context.Background())
-//	defer fcCancel()
-//	for range OrDoneFnFactory[string]().GenerateToStream(finalContext, resStream) {
-//		//t.Log("In the end ve GOT:", v)
-//		evenCount++
-//	}
-//
-//	t.Log("Total events generated: ", genCounter)
-//	t.Log("Total events processed: ", evenCount)
-//}
