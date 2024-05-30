@@ -1,5 +1,18 @@
 package tests
 
+import (
+	"context"
+	"github.com/lissdx/yapgo2/pkg/logger"
+	pl "github.com/lissdx/yapgo2/pkg/pipeline"
+	"github.com/lissdx/yapgo2/pkg/pipeline/config/generator/config_producer"
+	config_stream_handler "github.com/lissdx/yapgo2/pkg/pipeline/config/stream_handler"
+	"github.com/stretchr/testify/assert"
+	"go.uber.org/goleak"
+	"slices"
+	"testing"
+	"time"
+)
+
 //
 //import (
 //	"context"
@@ -11,43 +24,179 @@ package tests
 //	"testing"
 //	"time"
 //)
-//
-//func TestOrDone1(t *testing.T) {
-//	defer goleak.VerifyNone(t)
-//
-//	tests := []struct {
-//		name     string
-//		dataList []int
-//		want     []int
-//	}{
-//		{name: "oneInt", dataList: []int{1}, want: []int{1}},
-//		{name: "twoInt", dataList: []int{-1, 0}, want: []int{-1, 0}},
-//		{name: "multiInt", dataList: []int{777, 555, 999, 999, 999, 999, 999, 999}, want: []int{555, 777, 999}},
-//	}
-//
-//	for _, tt := range tests {
-//		t.GenerateToStream(tt.name, func(t *testing.T) {
-//
-//			ctx, cancelFn := context.WithCancel(context.Background())
-//			defer cancelFn()
-//
-//			genHandler := pl.GeneratorHandlerFactory(pl.SliceGeneratorFuncFactory(tt.dataList), genHandlerConf.WithTimesToGenerate(100))
-//			dataStream := pl.GeneratorStageFactory(genHandler).GenerateToStream(ctx)
-//
-//			var got []int
-//			for num := range pl.OrDoneFnFactory[int]().GenerateToStream(ctx, dataStream) {
-//				got = append(got, num)
-//			}
-//
-//			t.Logf("%s got: %v", t.Name(), got)
-//			slices.Sort(got)
-//			res := slices.Compact(got)
-//
-//			assert.Equal(t, tt.want, res)
-//		})
-//	}
-//}
-//
+
+var htLogger = func() logger.ILogger {
+	return logger.LoggerFactory(
+		logger.WithZapLoggerImplementer(),
+		logger.WithLoggerLevel("DEBUG"),
+		logger.WithZapColored(),
+		logger.WithZapConsoleEncoding(),
+		logger.WithZapColored(),
+	)
+}()
+
+func TestOrDoneCloseByChannel(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	tests := []struct {
+		name           string
+		dataList       []int
+		options        []config_producer.Option
+		genContextFunc func() (context.Context, context.CancelFunc)
+		checkResult    bool
+		want           []int
+	}{
+		{name: "oneInt Infinitely",
+			dataList: []int{1},
+			want:     []int{1},
+			genContextFunc: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), time.Microsecond*1000)
+			},
+		},
+		{name: "multiInt Infinitely",
+			dataList: []int{1, -1, 2, 777, 999, 7, 777, -1},
+			want:     []int{-1, 1, 2, 7, 777, 999},
+			genContextFunc: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), time.Microsecond*1000)
+			},
+		},
+		{name: "multiInt + WithTimesToGenerate",
+			dataList: []int{1, -1, 2, 777, 999, 7, 777, -1},
+			want:     []int{-1, 1, 2, 7, 777, 999},
+			options:  []config_producer.Option{config_producer.WithTimesToGenerate(uint(20))},
+			genContextFunc: func() (context.Context, context.CancelFunc) {
+				return context.WithCancel(context.Background())
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			ctx, cancelFn := tt.genContextFunc()
+			defer cancelFn()
+
+			genHandler := pl.GeneratorProducerFactory(pl.SliceGeneratorFuncFactory(tt.dataList), tt.options...)
+			dataStream := genHandler.GenerateToStream(ctx)
+
+			var got []int
+			for num := range pl.OrDoneFnFactory[int](config_stream_handler.WithLogger(htLogger)).Run(context.Background(), dataStream) {
+				got = append(got, num)
+			}
+
+			res := func() []int {
+				if tt.checkResult {
+					return got
+				}
+				slices.Sort(got)
+				return slices.Compact(got)
+			}()
+
+			assert.Equal(t, tt.want, res)
+		})
+	}
+}
+
+func TestOrDoneCloseByContext(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	tests := []struct {
+		name              string
+		dataList          []int
+		options           []config_producer.Option
+		orDoneContextFunc func() (context.Context, context.CancelFunc)
+		checkResult       bool
+		want              []int
+	}{
+		{name: "oneInt Infinitely",
+			dataList: []int{1},
+			want:     []int{1},
+			orDoneContextFunc: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), time.Microsecond*1000)
+			},
+		},
+		{name: "oneInt Infinitely",
+			dataList: []int{1, -1, 2, 777, 999, 7, 777, -1},
+			want:     []int{-1, 1, 2, 7, 777, 999},
+			orDoneContextFunc: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), time.Microsecond*1000)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			genContext, genContextCancel := context.WithCancel(context.Background())
+
+			genHandler := pl.GeneratorProducerFactory(pl.SliceGeneratorFuncFactory(tt.dataList), tt.options...)
+			dataStream := genHandler.GenerateToStream(genContext)
+
+			var got []int
+			orDoneCtx, orDoneCtxCancel := tt.orDoneContextFunc()
+			defer orDoneCtxCancel()
+			for num := range pl.OrDoneFnFactory[int](config_stream_handler.WithLogger(htLogger)).Run(orDoneCtx, dataStream) {
+				got = append(got, num)
+			}
+
+			// stop a generator after OrDone was stopped
+			genContextCancel()
+
+			res := func() []int {
+				if tt.checkResult {
+					return got
+				}
+				slices.Sort(got)
+				return slices.Compact(got)
+			}()
+
+			assert.Equal(t, tt.want, res)
+		})
+	}
+}
+
+func TestMergeFnFactoryCloseByChannel(t *testing.T) {
+	tests := []struct {
+		name           string
+		options        []config_producer.Option
+		genContextFunc func() (context.Context, context.CancelFunc)
+		dataList       [][]int
+		want           []int
+	}{
+		{name: "oneInt", dataList: [][]int{{1}}, want: []int{1}},
+		{name: "twoInt", dataList: [][]int{{-1, 0}}, want: []int{-1, 0}},
+		{name: "multiInt", dataList: [][]int{{1}, {-1, 0}, {777, 555, 999, 999, 999, 999, 999, 999}}, want: []int{-1, 0, 1, 555, 777, 999}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			ctx, cancelFn := tt.genContextFunc()
+			defer cancelFn()
+
+			dataStreams := make([]pl.ReadOnlyStream[int], 0, len(tt.dataList))
+			for i := 0; i < len(tt.dataList); i++ {
+				genHandler := pl.GeneratorProducerFactory(pl.SliceGeneratorFuncFactory(tt.dataList[i]), tt.options...)
+				dataStream := genHandler.GenerateToStream(ctx)
+				dataStreams = append(dataStreams, dataStream)
+			}
+
+			resultDataStream := pl.MergeFnFactory[[]pl.ReadOnlyStream[int]]().Run(ctx, dataStreams)
+
+			var got []int
+			for num := range pl.OrDoneFnFactory[int]().GenerateToStream(ctx, resultDataStream) {
+				got = append(got, num)
+			}
+
+			t.Logf("%s got: %v", t.Name(), got)
+			slices.Sort(got)
+			res := slices.Compact(got)
+
+			assert.Equal(t, tt.want, res)
+		})
+	}
+}
+
 //func TestOrDoneContextWithTimeout(t *testing.T) {
 //	tests := []struct {
 //		name     string
@@ -81,7 +230,7 @@ package tests
 //		})
 //	}
 //}
-//
+
 //// Close channel
 //func TestOrDoneReadFromClosedChannel(t *testing.T) {
 //	tests := []struct {
@@ -124,47 +273,7 @@ package tests
 //		})
 //	}
 //}
-//
-//func TestMergeFnFactory1(t *testing.T) {
-//	tests := []struct {
-//		name     string
-//		dataList [][]int
-//		want     []int
-//	}{
-//		{name: "oneInt", dataList: [][]int{{1}}, want: []int{1}},
-//		{name: "twoInt", dataList: [][]int{{-1, 0}}, want: []int{-1, 0}},
-//		{name: "multiInt", dataList: [][]int{{1}, {-1, 0}, {777, 555, 999, 999, 999, 999, 999, 999}}, want: []int{-1, 0, 1, 555, 777, 999}},
-//	}
-//
-//	for _, tt := range tests {
-//		t.GenerateToStream(tt.name, func(t *testing.T) {
-//
-//			ctx, cancelFn := context.WithTimeout(context.Background(), time.Microsecond*1000)
-//			defer cancelFn()
-//
-//			dataStreams := make([]pl.ReadOnlyStream[int], 0, len(tt.dataList))
-//			for i := 0; i < len(tt.dataList); i++ {
-//				genHandler := pl.GeneratorHandlerFactory(pl.SliceGeneratorFuncFactory(tt.dataList[i]))
-//				dataStream := pl.GeneratorStageFactory(genHandler).GenerateToStream(ctx)
-//				dataStreams = append(dataStreams, dataStream)
-//			}
-//
-//			resultDataStream := pl.MergeFnFactory[[]pl.ReadOnlyStream[int]]().GenerateToStream(ctx, dataStreams)
-//
-//			var got []int
-//			for num := range pl.OrDoneFnFactory[int]().GenerateToStream(ctx, resultDataStream) {
-//				got = append(got, num)
-//			}
-//
-//			t.Logf("%s got: %v", t.Name(), got)
-//			slices.Sort(got)
-//			res := slices.Compact(got)
-//
-//			assert.Equal(t, tt.want, res)
-//		})
-//	}
-//}
-//
+
 //// with closed channels
 //func TestMergeFnFactory2(t *testing.T) {
 //	tests := []struct {
