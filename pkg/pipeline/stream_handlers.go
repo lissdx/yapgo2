@@ -219,22 +219,22 @@ func MergeFnFactory[S ~[]ReadOnlyStream[T], T any](options ...cnfStreamHandler.O
 // FlatSlicesToStreamFnFactory flats slices []IN given via inStream
 // into flat data IN and sends them one by one to the outStream
 func FlatSlicesToStreamFnFactory[S ~[]T, T any](options ...cnfStreamHandler.Option) StreamToStreamHandler[S, T] {
-	stgName := "FlatSlicesToStreamFnFactory"
+	factoryName := "FlatSlicesToStreamFnFactory"
 	conf := cnfStreamHandler.NewStreamHandlerConfig(options...)
-	loggerPref := fmt.Sprintf("%s_%s", stgName, conf.Name())
+	loggerPref := fmt.Sprintf("%s_%s", factoryName, conf.Name())
 
 	return func(ctx context.Context, inStream ReadOnlyStream[S]) ReadOnlyStream[T] {
 		outStream := make(chan T)
 		g, ctx := errgroup.WithContext(ctx)
 
 		g.Go(func() error {
-			conf.Logger().Info("%s: %s handler started", loggerPref, stgName)
-			conf.Logger().Info("%s: %s outStream created", loggerPref, stgName)
+			conf.Logger().Info("%s: %s started", loggerPref, factoryName)
+			conf.Logger().Info("%s: %s outStream created", loggerPref, factoryName)
 		exit:
 			for {
 				select {
 				case <-ctx.Done():
-					conf.Logger().Debug("%s: %s Got <-ctx.Done()", loggerPref, stgName)
+					conf.Logger().Debug("%s: %s Got <-ctx.Done()", loggerPref, factoryName)
 					return ctx.Err()
 				case vSliceData, ok := <-inStream:
 					if !ok {
@@ -249,7 +249,7 @@ func FlatSlicesToStreamFnFactory[S ~[]T, T any](options ...cnfStreamHandler.Opti
 					}
 				}
 			}
-			conf.Logger().Debug("%s: %s input stream closed", loggerPref, stgName)
+			conf.Logger().Debug("%s: %s input stream was closed", loggerPref, factoryName)
 			return nil
 		})
 
@@ -257,13 +257,13 @@ func FlatSlicesToStreamFnFactory[S ~[]T, T any](options ...cnfStreamHandler.Opti
 			defer close(outStream)
 			if err := g.Wait(); err != nil {
 				if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
-					conf.Logger().Error("%s: %s error: %s", loggerPref, stgName, err.Error())
+					conf.Logger().Error("%s: %s error: %s", loggerPref, factoryName, err.Error())
 				} else {
-					conf.Logger().Warn("%s: %s interrupted: %s", loggerPref, stgName, err.Error())
+					conf.Logger().Warn("%s: %s interrupted: %s", loggerPref, factoryName, err.Error())
 				}
 			}
-			conf.Logger().Info("%s: %s handler was stopped", loggerPref, stgName)
-			conf.Logger().Info("%s: %s close outStream", loggerPref, stgName)
+			conf.Logger().Info("%s: %s was stopped", loggerPref, factoryName)
+			conf.Logger().Info("%s: %s close outStream", loggerPref, factoryName)
 		}()
 
 		return outStream
