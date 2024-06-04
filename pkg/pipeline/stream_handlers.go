@@ -15,6 +15,12 @@ type StreamToStreamHandler[T, RS any] func(context.Context, ReadOnlyStream[T]) R
 type StreamsToStreamHandler[S ~[]ReadOnlyStream[T], T any] func(context.Context, S) ReadOnlyStream[T]
 type StubFunc[T any] func(context.Context, ReadOnlyStream[T]) context.Context
 
+//type StreamsToStreamHandler2[S ~[]ROS, ROS ReadOnlyStream[T], T any] func(context.Context, S) ROS
+
+//func (sss StreamsToStreamHandler2[S, ROS, T]) Run(ctx context.Context, inStreams S) ROS {
+//	return sss(ctx, inStreams)
+//}
+
 func (s StubFunc[T]) Run(ctx context.Context, inStream ReadOnlyStream[T]) context.Context {
 	return s(ctx, inStream)
 }
@@ -23,7 +29,7 @@ func (ss StreamToStreamHandler[T, RS]) Run(ctx context.Context, inStream ReadOnl
 	return ss(ctx, inStream)
 }
 
-func (sss StreamsToStreamHandler[S, RS]) Run(ctx context.Context, inStreams S) ReadOnlyStream[RS] {
+func (sss StreamsToStreamHandler[S, T]) Run(ctx context.Context, inStreams S) ReadOnlyStream[T] {
 	return sss(ctx, inStreams)
 }
 
@@ -107,13 +113,13 @@ func MergeFnFactory[S ~[]ReadOnlyStream[T], T any](options ...cnfStreamHandler.O
 			g.Go(func() error {
 
 				logPref := fmt.Sprintf("%s_%d", loggerPref, indx)
-				conf.Logger().Info("%s_%d: MergeFnFactory subprocess started", logPref, indx)
+				conf.Logger().Info("%s: MergeFnFactory subprocess %d started", logPref, indx)
 
 			exit:
 				for {
 					select {
 					case <-ctx.Done():
-						conf.Logger().Debug("%s: MergeFnFactory subprocess Got <-ctx.Done()", logPref)
+						conf.Logger().Debug("%s: MergeFnFactory subprocess %d Got <-ctx.Done()", logPref, indx)
 						return ctx.Err()
 					case vData, ok := <-lInStream:
 						if !ok {
@@ -121,14 +127,14 @@ func MergeFnFactory[S ~[]ReadOnlyStream[T], T any](options ...cnfStreamHandler.O
 						}
 						select {
 						case <-ctx.Done():
-							return fmt.Errorf("%s: MergeFnFactory subprocess interrupted got <-ctx.Done() but data wath fetched. context error: %w",
-								logPref, ctx.Err())
+							return fmt.Errorf("%s: MergeFnFactory subprocess %d interrupted got <-ctx.Done() but data wath fetched. context error: %w",
+								logPref, indx, ctx.Err())
 						case outStream <- vData:
 						}
 					}
 				}
 
-				conf.Logger().Debug("%s: MergeFnFactory subprocess input stream closed", logPref)
+				conf.Logger().Debug("%s: MergeFnFactory subprocess %d input stream closed", logPref, indx)
 				return nil
 			})
 		}
@@ -150,28 +156,116 @@ func MergeFnFactory[S ~[]ReadOnlyStream[T], T any](options ...cnfStreamHandler.O
 	}
 }
 
+//StreamsToStreamHandler2
+//func MergeFnFactory2[S ~[]ROS, ROS ReadOnlyStream[T], T any](options ...cnfStreamHandler.Option) StreamsToStreamHandler2[S, ROS, T] {
+//
+//	conf := cnfStreamHandler.NewStreamHandlerConfig(options...)
+//	loggerPref := fmt.Sprintf("MergeFnFactory_%s", conf.Name())
+//
+//	//return func(ctx context.Context, inStreams S) ReadOnlyStream[T] {
+//	//	outStream := make(chan T)
+//	//
+//	//	g, ctx := errgroup.WithContext(ctx)
+//	//
+//	//	for i, inStream := range inStreams {
+//	//		lInStream := inStream
+//	//		indx := i
+//	//		g.Go(func() error {
+//	//
+//	//			logPref := fmt.Sprintf("%s_%d", loggerPref, indx)
+//	//			conf.Logger().Info("%s_%d: MergeFnFactory subprocess started", logPref, indx)
+//	//
+//	//		exit:
+//	//			for {
+//	//				select {
+//	//				case <-ctx.Done():
+//	//					conf.Logger().Debug("%s: MergeFnFactory subprocess Got <-ctx.Done()", logPref)
+//	//					return ctx.Err()
+//	//				case vData, ok := <-lInStream:
+//	//					if !ok {
+//	//						break exit
+//	//					}
+//	//					select {
+//	//					case <-ctx.Done():
+//	//						return fmt.Errorf("%s: MergeFnFactory subprocess interrupted got <-ctx.Done() but data wath fetched. context error: %w",
+//	//							logPref, ctx.Err())
+//	//					case outStream <- vData:
+//	//					}
+//	//				}
+//	//			}
+//	//
+//	//			conf.Logger().Debug("%s: MergeFnFactory subprocess input stream closed", logPref)
+//	//			return nil
+//	//		})
+//	//	}
+//	//
+//	//	go func() {
+//	//		defer close(outStream)
+//	//		if err := g.Wait(); err != nil {
+//	//			if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+//	//				conf.Logger().Error("%s: MergeFnFactory error: %s", loggerPref, err.Error())
+//	//			} else {
+//	//				conf.Logger().Warn("%s: MergeFnFactory interrupted: %s", loggerPref, err.Error())
+//	//			}
+//	//		}
+//	//		conf.Logger().Info("%s: MergeFnFactory all processes was stopped", loggerPref)
+//	//		conf.Logger().Info("%s: MergeFnFactory close outStream", loggerPref)
+//	//	}()
+//	//
+//	//	return outStream
+//	//}
+//}
+
 // FlatSlicesToStreamFnFactory flats slices []IN given via inStream
 // into flat data IN and sends them one by one to the outStream
-func FlatSlicesToStreamFnFactory[S ~[]T, T any]() StreamToStreamHandler[S, T] {
+func FlatSlicesToStreamFnFactory[S ~[]T, T any](options ...cnfStreamHandler.Option) StreamToStreamHandler[S, T] {
+	stgName := "FlatSlicesToStreamFnFactory"
+	conf := cnfStreamHandler.NewStreamHandlerConfig(options...)
+	loggerPref := fmt.Sprintf("%s_%s", stgName, conf.Name())
+
 	return func(ctx context.Context, inStream ReadOnlyStream[S]) ReadOnlyStream[T] {
 		outStream := make(chan T)
-		go func() {
-			defer close(outStream)
-			for slicedData := range OrDoneFnFactory[S]().Run(ctx, inStream) {
+		g, ctx := errgroup.WithContext(ctx)
+
+		g.Go(func() error {
+			conf.Logger().Info("%s: %s handler started", loggerPref, stgName)
+			conf.Logger().Info("%s: %s outStream created", loggerPref, stgName)
+		exit:
+			for {
 				select {
 				case <-ctx.Done():
-					return
-				default:
-					for i := 0; i < len(slicedData); i += 1 {
+					conf.Logger().Debug("%s: %s Got <-ctx.Done()", loggerPref, stgName)
+					return ctx.Err()
+				case vSliceData, ok := <-inStream:
+					if !ok {
+						break exit
+					}
+					for i := 0; i < len(vSliceData); i += 1 {
 						select {
 						case <-ctx.Done():
-							return
-						case outStream <- slicedData[i]:
+							return fmt.Errorf("interrupted got <-ctx.Done() but data wath fetched. context error: %w", ctx.Err())
+						case outStream <- vSliceData[i]:
 						}
 					}
 				}
 			}
+			conf.Logger().Debug("%s: %s input stream closed", loggerPref, stgName)
+			return nil
+		})
+
+		go func() {
+			defer close(outStream)
+			if err := g.Wait(); err != nil {
+				if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+					conf.Logger().Error("%s: %s error: %s", loggerPref, stgName, err.Error())
+				} else {
+					conf.Logger().Warn("%s: %s interrupted: %s", loggerPref, stgName, err.Error())
+				}
+			}
+			conf.Logger().Info("%s: %s handler was stopped", loggerPref, stgName)
+			conf.Logger().Info("%s: %s close outStream", loggerPref, stgName)
 		}()
+
 		return outStream
 	}
 }
