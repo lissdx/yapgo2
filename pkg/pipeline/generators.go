@@ -3,206 +3,209 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/lissdx/yapgo2/pkg/logger"
+	genConf "github.com/lissdx/yapgo2/pkg/pipeline/config/generator/config_producer"
+	"golang.org/x/sync/errgroup"
+	"math/rand"
+	"time"
 )
 
-var EmptySliceToGenerateFrom = errors.New("the Slice provided to the SliceGenerator function is empty")
+// GeneratorFunc should generate any
+// kind of data
+// returns:
+// IN - generated data
+type GeneratorFunc[T any] func() T
+type GeneratorFuncHandler[T any] GeneratorFunc[T]
 
-//type GeneratorType int
-//
-//const (
-//	SliceToStreamGenerator GeneratorType = iota
-//	MaxGeneratorType
-//)
-//
-//func (t GeneratorType) IsValid() bool {
-//	return t >= 0 && t < MaxGeneratorType
-//}
+// ToStreamGeneratorFn func should be returned by the stage creation factory
+// (in general means stage that ready to run it)
+// after the "stage" is created we may start the stage as result we will
+// get the "output stream" (channel) and read the generated data from the "output stream"
+//type ToStreamGeneratorFn[IN any, ROS ReadOnlyStream[ProcessResultCarrier[IN]]] func(context.Context) ROS
 
-// type SliceToStreamGeneratorFn[S ~[]T, T any] func(context.Context, S) ReadOnlyStream[T]
-// type FnStreamGeneratorFn[T any] func(context.Context, GeneratorFn[T]) ReadOnlyStream[T]
-
-type GeneratorFn[T any] func() T
-type ToStreamGenerator[T, RS any] func(context.Context, T) ReadOnlyStream[RS]
-
-func (tsg ToStreamGenerator[T, RS]) Run(ctx context.Context, t T) ReadOnlyStream[RS] {
-	return tsg(ctx, t)
+// ToStreamGenerator interface
+// implemented by GeneratorHandlerFunc
+type ToStreamGenerator[T any, ROS ReadOnlyStream[T]] interface {
+	GenerateToStream(context.Context) ROS
 }
 
-// GeneratorFnToStreamGeneratorFactory is the main approach of the data generation
-// We are going to use the GeneratorFn to generate any kind of data
-// see the generators_example_test and learn how we can use it
-// The data may be generated in 2 modes:
-//  1. GenerateInfinitely - means never ended generation
-//  2. Generate N data-items only - in this case we should provide
-//     the N via GenConfigOption.WithTimesToGenerate
-//
-// Example:
-// genStage := GeneratorFnToStreamGeneratorFactory[GeneratorFn[int]](WithTimesToGenerate(7))
-// outStream := genStage.Run(ctx, func () int {return rand.Intn(100)})
-// ...
-// NOTE: WithTimesToGenerate(0) means GenerateInfinitely mode
-func GeneratorFnToStreamGeneratorFactory[GF GeneratorFn[T], T any](options ...GenConfigOption) ToStreamGenerator[GF, T] {
-	genConfig := generatorConfig{}
-	for _, option := range options {
-		option.apply(&genConfig)
-	}
+// ToStreamGenerateFunc - should wrap the GeneratorFunc
+// the result of GeneratorFunc will be wrapped as ProcessResultCarrier
+// and will be sent to the output stream
+type ToStreamGenerateFunc[T any, ROS ReadOnlyStream[T]] func(ctx context.Context) ROS
 
-	return func(ctx context.Context, genFunc GF) ReadOnlyStream[T] {
-		outStream := make(chan T)
-		go func() {
-			maxTimesToGenerate := genConfig.timesToGenerate
-			defer close(outStream)
-			for genConfig.timesToGenerate == GenerateInfinitely || maxTimesToGenerate > 0 {
-				select {
-				case <-ctx.Done():
-					return
-				case outStream <- genFunc():
+func (gpf ToStreamGenerateFunc[T, ROS]) GenerateToStream(ctx context.Context) ROS {
+	return gpf(ctx)
+}
+
+// DataGenerator interface
+// implemented by GeneratorFunc
+type DataGenerator[T any] interface {
+	GenerateData() T
+}
+
+func (g GeneratorFuncHandler[T]) GenerateData() T {
+	return g()
+}
+
+// GeneratorProducerFactory factory creates the ToStreamGenerateFunc
+// if the WithTimesToGenerate option is provided we will wrap
+// GeneratorFunc with special method (which calculates the generation times)
+// if WithTimesToGenerate == 0 - means run the generator in the Infinitely mode
+func GeneratorProducerFactory[T any, ROS ReadOnlyStream[T]](genFuncHandler GeneratorFuncHandler[T], options ...genConf.Option) ToStreamGenerator[T, ROS] {
+	factoryName := "GeneratorProducerFactory"
+	conf := genConf.NewGeneratorProducerConfig(options...)
+	loggerPref := fmt.Sprintf("%s", conf.Name())
+
+	switch conf.GenerateInfinitely() {
+	case false:
+		// Create the ToStreamGenerateFunc with TimesToGenerate option
+		return ToStreamGenerateFunc[T, ROS](func(ctx context.Context) ROS {
+			outStream := make(chan T)
+			g, ctx := errgroup.WithContext(ctx)
+
+			g.Go(func() error {
+				conf.Logger().Info("%s: %s started with TimesToGenerate: %d", loggerPref, factoryName, conf.TimesToGenerate())
+				conf.Logger().Info("%s: %s outStream created", loggerPref, factoryName)
+				genCount := uint(0)
+				for ; genCount < conf.TimesToGenerate(); genCount++ {
+					select {
+					case <-ctx.Done():
+						conf.Logger().Debug("%s: Got <-ctx.Done(). %s sent %d items", loggerPref, factoryName, genCount)
+						return fmt.Errorf("interrupted. Sent items: %d (insead of %d). context error: %w",
+							genCount, conf.TimesToGenerate(), ctx.Err())
+					case outStream <- genFuncHandler.GenerateData():
+					}
 				}
-				if maxTimesToGenerate > 0 {
-					maxTimesToGenerate -= 1
+
+				conf.Logger().Debug("%s: %s successfully sent %d items", loggerPref, factoryName, genCount)
+				conf.Logger().Debug("%s: %s input stream was closed", loggerPref, factoryName)
+
+				return nil
+			})
+
+			go func() {
+				defer close(outStream)
+				if err := g.Wait(); err != nil {
+					if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+						conf.Logger().Error("%s: %s error: %s", loggerPref, factoryName, err.Error())
+					} else {
+						conf.Logger().Warn("%s: %s interrupted: %s", loggerPref, factoryName, err.Error())
+					}
 				}
-			}
-		}()
-		return outStream
+				conf.Logger().Info("%s: %s was stopped", loggerPref, factoryName)
+				conf.Logger().Info("%s: %s close outStream", loggerPref, factoryName)
+			}()
+
+			return outStream
+		})
+	default:
+		// Create the ToStreamGenerateFunc without TimesToGenerate option
+		return ToStreamGenerateFunc[T, ROS](func(ctx context.Context) ROS {
+			outStream := make(chan T)
+			g, ctx := errgroup.WithContext(ctx)
+
+			g.Go(func() error {
+				conf.Logger().Info("%s: %s started with TimesToGenerate: ProduceInfinitely", loggerPref, factoryName)
+				conf.Logger().Info("%s: %s outStream created", loggerPref, factoryName)
+				for {
+					select {
+					case <-ctx.Done():
+						conf.Logger().Debug("%s: Got <-ctx.Done(). %s was interrupted", loggerPref, factoryName)
+						return ctx.Err()
+					case outStream <- genFuncHandler.GenerateData():
+					}
+				}
+			})
+
+			go func() {
+				defer close(outStream)
+				if err := g.Wait(); err != nil {
+					if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+						conf.Logger().Error("%s: %s error: %s", loggerPref, factoryName, err.Error())
+					} else {
+						conf.Logger().Info("%s: %s interruption cause: %s", loggerPref, factoryName, err.Error())
+					}
+				}
+				conf.Logger().Info("%s: %s stopped", loggerPref, factoryName)
+			}()
+
+			return outStream
+		})
 	}
 }
 
-// SliceToStreamOnePassGeneratorFactory
-// simple wrapper of GeneratorFnToStreamGeneratorFactory
-// generates data by len of the given slice and returns
-// the slice one by one element
-func SliceToStreamOnePassGeneratorFactory[S ~[]T, T any]() ToStreamGenerator[S, T] {
-	return func(ctx context.Context, vData S) ReadOnlyStream[T] {
-		genFunc := GeneratorFnFromSliceFactory[S, T](vData)
-		return GeneratorFnToStreamGeneratorFactory[GeneratorFn[T]](WithTimesToGenerate(uint(len(vData)))).
-			Run(ctx, genFunc)
-	}
-}
-
-// SliceToStreamInfinitelyGeneratorFactory
-// simple wrapper of GeneratorFnToStreamGeneratorFactory
-// generates data from the given slice and returns
-// the elements of the slice repetitively
-func SliceToStreamInfinitelyGeneratorFactory[S ~[]T, T any]() ToStreamGenerator[S, T] {
-	return func(ctx context.Context, vData S) ReadOnlyStream[T] {
-		genFunc := GeneratorFnFromSliceFactory[S, T](vData)
-		return GeneratorFnToStreamGeneratorFactory[GeneratorFn[T]]().
-			Run(ctx, genFunc)
-	}
-}
-
-// SliceToStreamNGeneratorFactory
-// simple wrapper of GeneratorFnToStreamGeneratorFactory
-// generates data from the given slice and returns
-// the elements N times (maybe repetitively in case of N > len(given_slice))
-func SliceToStreamNGeneratorFactory[S ~[]T, T any](n uint) ToStreamGenerator[S, T] {
-	return func(ctx context.Context, vData S) ReadOnlyStream[T] {
-		genFunc := GeneratorFnFromSliceFactory[S, T](vData)
-		return GeneratorFnToStreamGeneratorFactory[GeneratorFn[T]](WithTimesToGenerate(n)).
-			Run(ctx, genFunc)
-	}
-}
-
-// FlatSlicesToStreamFnFactory flats slices []T given by inStream
-// into flat data T and sends them one by one via outStream
-//func FlatSlicesToStreamFnFactory[IS ReadOnlyStream[S], S ~[]T, T any]() ToStreamGenerator[IS, T] {
-//	return func(ctx context.Context, inStream IS) ReadOnlyStream[T] {
-//		outStream := make(chan T)
-//		go func() {
-//			defer close(outStream)
-//			for {
-//				select {
-//				case <-ctx.Done():
-//					return
-//				case h, ok := <-inStream:
-//					if !ok {
-//						return
-//					}
-//					select {
-//					case <-ctx.Done():
-//						return
-//					default:
-//						for _, v := range h {
-//							select {
-//							case <-ctx.Done():
-//								return
-//							case outStream <- v:
-//							}
-//						}
-//					}
-//				}
-//				runtime.Gosched()
-//			}
-//		}()
-//		return outStream
-//	}
-//}
-
-//func MergeChannels(doneCh ReadOnlyStream, inChans []ReadOnlyStream) ReadOnlyStream {
-//	var wg sync.WaitGroup
-//	wg.Add(len(inChans))
-//
-//	outChan := make(chan interface{})
-//	for _, inChan := range inChans {
-//		go func(ch <-chan interface{}) {
-//			defer wg.Done()
-//			for obj := range OrDone(doneCh, ch) {
-//				select {
-//				case <-doneCh:
-//					return
-//				case outChan <- obj:
-//				}
-//
-//			}
-//		}(inChan)
-//	}
-//
-//	go func() {
-//		defer close(outChan)
-//		wg.Wait()
-//	}()
-//	return outChan
-//}
-
-//func OrDone[T any](ctx context.Context, inStream ReadOnlyStream[T]) ReadOnlyStream[T] {
-//	outStream := make(chan T)
-//	go func() {
-//		defer close(outStream)
-//		for {
-//			select {
-//			case <-ctx.Done():
-//				return
-//			case v, ok := <-inStream:
-//				if !ok {
-//					return
-//				}
-//				select {
-//				case <-ctx.Done():
-//					return
-//				case outStream <- v:
-//				}
-//			}
-//		}
-//	}()
-//	return outStream
-//}
-
-/**
- *  Helpers part
+/*
+ *
+ * Simple Generator function part
+ * Predefined generator examples
+ *
  */
 
-// GeneratorFnFromSliceFactory simple "Infinitely" item-generator
-// from the given slice of Data
-func GeneratorFnFromSliceFactory[S ~[]T, T any](s S) GeneratorFn[T] {
-	if len(s) <= 0 {
-		panic(EmptySliceToGenerateFrom)
-	}
-	currentIndx := 0
-	return func() T {
-		defer func() {
-			currentIndx = (currentIndx + 1) % len(s)
-		}()
+// SliceGeneratorFuncFactory creates the GeneratorFuncHandler
+// which should repeatedly generates values
+// from the given slice
+// if given slice is empty or nil
+// the generator will generate the default init value of the T type
+func SliceGeneratorFuncFactory[S ~[]T, T any](s S) GeneratorFuncHandler[T] {
 
-		return s[currentIndx]
+	// if the given slice is empty
+	if len(s) <= 0 {
+		return AValueGeneratorFuncFactory[T](func() (t T) { return }())
+	}
+
+	// generate the next value from the given slice
+	// in case of the end of the slice
+	// reset the index and start the generation from
+	// the beginning
+	return GeneratorFuncHandler[T](func() GeneratorFunc[T] {
+		currentIndx := 0
+		return func() T {
+			defer func() {
+				currentIndx = (currentIndx + 1) % len(s)
+			}()
+
+			return s[currentIndx]
+		}
+	}())
+}
+
+// AValueGeneratorFuncFactory generates
+// the passed value only
+func AValueGeneratorFuncFactory[T any](t T) GeneratorFuncHandler[T] {
+	return GeneratorFuncHandler[T](func() GeneratorFunc[T] {
+		return func() T {
+			return t
+		}
+	}())
+}
+
+// RandomIntGeneratorFuncFactory simple random int generator
+func RandomIntGeneratorFuncFactory(interval int) GeneratorFuncHandler[int] {
+	if interval <= 0 {
+		return func() int {
+			return rand.Int()
+		}
+	}
+
+	return func() int {
+		return rand.Intn(interval)
+	}
+}
+
+func WithTraceHandlerFactory[T any](name string, lg logger.ILogger, next GeneratorFuncHandler[T]) GeneratorFuncHandler[T] {
+	return func() T {
+		defer measureTime(name, lg)()
+
+		return next.GenerateData()
+	}
+}
+
+func measureTime(process string, lg logger.ILogger) func() {
+	lg.Debug("Start %s", process)
+	start := time.Now()
+	return func() {
+		lg.Debug("Time taken by %s is %v", process, time.Since(start))
 	}
 }
